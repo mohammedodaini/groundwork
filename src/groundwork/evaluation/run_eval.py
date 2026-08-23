@@ -25,6 +25,11 @@ from pathlib import Path
 from groundwork.agent.graph import ResearchEngine
 from groundwork.config import Settings, get_settings
 from groundwork.domain.schemas import ResearchRequest
+from groundwork.evaluation.offline import (
+    build_offline_fetcher,
+    build_offline_llm,
+    build_offline_search,
+)
 from groundwork.evaluation.scorers import TaskScore, score_result, summarise
 from groundwork.logging_conf import configure_logging
 from groundwork.providers.llm import build_llm
@@ -42,6 +47,23 @@ def load_tasks(path: Path) -> list[dict]:
     return tasks
 
 
+def _offline(settings: Settings) -> bool:
+    """The fake provider means a fully offline run, search included."""
+    return settings.llm_provider == "fake"
+
+
+def _build_llm(settings: Settings):
+    return build_offline_llm(settings) if _offline(settings) else build_llm(settings)
+
+
+def _build_search(settings: Settings):
+    return build_offline_search(settings) if _offline(settings) else build_search(settings)
+
+
+def _build_fetcher(settings: Settings) -> ContentFetcher:
+    return build_offline_fetcher(settings) if _offline(settings) else ContentFetcher(settings)
+
+
 async def run_task(task: dict, settings: Settings, *, repeats: int = 1) -> list[TaskScore]:
     """Run one task `repeats` times.
 
@@ -52,9 +74,9 @@ async def run_task(task: dict, settings: Settings, *, repeats: int = 1) -> list[
     for _ in range(repeats):
         engine = ResearchEngine(
             settings=settings,
-            llm=build_llm(settings),
-            search=build_search(settings),
-            fetcher=ContentFetcher(settings),
+            llm=_build_llm(settings),
+            search=_build_search(settings),
+            fetcher=_build_fetcher(settings),
         )
         request = ResearchRequest(
             objective=task["objective"],
@@ -96,9 +118,12 @@ def render_report(
 
     if not settings.uses_real_llm:
         lines += [
-            "> **These numbers are from the `fake` provider.** They demonstrate that",
-            "> the harness runs; they say nothing about research quality. Re-run with",
-            "> a real provider before citing anything here.",
+            "> **These numbers are from the `fake` provider.** The graph, the fetch",
+            "> pipeline and verbatim quote verification all run for real against a",
+            "> fixture corpus, so this catches regressions in the grounding",
+            "> mechanism. It says nothing about *research quality*, which depends",
+            "> entirely on the model. Re-run with a real provider before citing",
+            "> any quality claim.",
             "",
         ]
 
@@ -141,9 +166,7 @@ def render_report(
             if not g.ok:
                 issues.append(f"run errored: `{g.error}`")
             if g.forbidden_claims_present:
-                issues.append(
-                    f"produced {g.forbidden_claims_present} known-false claim(s)"
-                )
+                issues.append(f"produced {g.forbidden_claims_present} known-false claim(s)")
             for w in g.warnings[:5]:
                 issues.append(f"warning: {w}")
         if issues:
@@ -181,9 +204,7 @@ async def _amain(argv: list[str] | None = None) -> int:
     parser.add_argument("--out", type=Path, default=Path("docs/eval-results.md"))
     parser.add_argument("--repeats", type=int, default=1)
     parser.add_argument("--task", type=str, default=None, help="Run a single task id.")
-    parser.add_argument(
-        "--provider", type=str, default=None, help="Override llm_provider."
-    )
+    parser.add_argument("--provider", type=str, default=None, help="Override llm_provider.")
     args = parser.parse_args(argv)
 
     settings = get_settings()
@@ -215,9 +236,7 @@ async def _amain(argv: list[str] | None = None) -> int:
     args.out.write_text(report, encoding="utf-8")
 
     raw = args.out.with_suffix(".json")
-    raw.write_text(
-        json.dumps([asdict(s) for s in all_scores], indent=2), encoding="utf-8"
-    )
+    raw.write_text(json.dumps([asdict(s) for s in all_scores], indent=2), encoding="utf-8")
 
     print(f"\nWrote {args.out} and {raw}", file=sys.stderr)
     print(summarise(all_scores).as_markdown())

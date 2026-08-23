@@ -162,7 +162,12 @@ def test_report_labels_fake_provider_results(settings) -> None:
     tasks = load_tasks(DEFAULT_DATASET)[:1]
     report = render_report([score_result("t1", build_result())], settings, tasks, 1)
     assert "fake" in report.lower()
-    assert "say nothing about research quality" in report.lower()
+    # The disclaimer must survive rewording, so assert its substance: the run
+    # is labelled fake, it disclaims research quality, and it tells the reader
+    # to re-run against a real provider.
+    lowered = report.lower()
+    assert "nothing about" in lowered and "research quality" in lowered
+    assert "real provider" in lowered
 
 
 def test_report_contains_no_invented_numbers(settings) -> None:

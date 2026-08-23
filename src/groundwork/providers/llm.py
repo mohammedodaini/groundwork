@@ -161,6 +161,15 @@ class FakeLLM(LLMProvider):
         self._fail_times = fail_times
         self.seen_prompts: list[tuple[str, str]] = []
 
+    def estimated_cost_usd(self) -> float:
+        """Always 0.0: no request leaves the process, so nothing is billed.
+
+        Without this override the base class prices fake tokens at the
+        configured real-model rate and an offline run reports spend that
+        never happened.
+        """
+        return 0.0
+
     async def complete(self, *, system: str, user: str) -> LLMResponse:
         self.seen_prompts.append((system, user))
 
@@ -247,19 +256,13 @@ class OpenAILLM(LLMProvider):  # pragma: no cover - parity implementation
     DEFAULT_BASE_URL: str | None = None
 
     def _credential(self, settings: Settings) -> str | None:
-        return (
-            settings.openai_api_key.get_secret_value()
-            if settings.openai_api_key
-            else None
-        )
+        return settings.openai_api_key.get_secret_value() if settings.openai_api_key else None
 
     def __init__(self, settings: Settings) -> None:
         super().__init__(settings)
         api_key = self._credential(settings)
         if api_key is None:
-            raise LLMError(
-                f"{self.KEY_NAME} is required for llm_provider={settings.llm_provider}"
-            )
+            raise LLMError(f"{self.KEY_NAME} is required for llm_provider={settings.llm_provider}")
         try:
             from openai import AsyncOpenAI
         except ImportError as exc:
@@ -331,9 +334,7 @@ class OpenRouterLLM(OpenAILLM):  # pragma: no cover - network dependent
 
     def _credential(self, settings: Settings) -> str | None:
         return (
-            settings.openrouter_api_key.get_secret_value()
-            if settings.openrouter_api_key
-            else None
+            settings.openrouter_api_key.get_secret_value() if settings.openrouter_api_key else None
         )
 
 
@@ -344,9 +345,7 @@ class GroqLLM(OpenAILLM):  # pragma: no cover - network dependent
     DEFAULT_BASE_URL = "https://api.groq.com/openai/v1"
 
     def _credential(self, settings: Settings) -> str | None:
-        return (
-            settings.groq_api_key.get_secret_value() if settings.groq_api_key else None
-        )
+        return settings.groq_api_key.get_secret_value() if settings.groq_api_key else None
 
 
 class OllamaLLM(OpenAILLM):  # pragma: no cover - needs a local daemon
