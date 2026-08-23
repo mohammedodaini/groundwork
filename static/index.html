@@ -1,0 +1,322 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Groundwork — Evidence-Grounded Research Agent</title>
+<style>
+  :root {
+    --bg: #0f1115; --panel: #171a21; --panel-2: #1e222b; --line: #2a2f3a;
+    --text: #e6e9ef; --muted: #9aa3b2; --dim: #6b7383;
+    --fact: #3fb950; --inference: #d29922; --unknown: #6b7383;
+    --bad: #f85149; --accent: #58a6ff;
+    --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font: 15px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  }
+  header {
+    border-bottom: 1px solid var(--line); padding: 18px 24px;
+    display: flex; align-items: baseline; gap: 14px; flex-wrap: wrap;
+  }
+  h1 { font-size: 18px; margin: 0; letter-spacing: -.2px; }
+  .tag { font-size: 12px; color: var(--muted); }
+  main { max-width: 1080px; margin: 0 auto; padding: 24px; }
+  .panel {
+    background: var(--panel); border: 1px solid var(--line);
+    border-radius: 10px; padding: 18px; margin-bottom: 18px;
+  }
+  label { display: block; font-size: 12px; color: var(--muted); margin: 10px 0 5px; text-transform: uppercase; letter-spacing: .6px; }
+  textarea, input[type=text], input[type=number] {
+    width: 100%; background: var(--bg); color: var(--text);
+    border: 1px solid var(--line); border-radius: 7px; padding: 10px; font: inherit;
+  }
+  textarea { min-height: 72px; resize: vertical; }
+  .row { display: flex; gap: 12px; flex-wrap: wrap; }
+  .row > div { flex: 1; min-width: 130px; }
+  button {
+    background: var(--accent); color: #06121f; border: 0; border-radius: 7px;
+    padding: 10px 16px; font: 600 14px inherit; cursor: pointer; margin-top: 14px;
+  }
+  button:disabled { opacity: .5; cursor: not-allowed; }
+  button.ghost { background: transparent; color: var(--text); border: 1px solid var(--line); }
+  button.ok { background: var(--fact); color: #06210c; }
+  button.no { background: var(--bad); color: #2a0806; }
+  .status { font-family: var(--mono); font-size: 12px; color: var(--muted); }
+  .pill {
+    display: inline-block; font: 600 10px var(--mono); padding: 2px 7px;
+    border-radius: 20px; text-transform: uppercase; letter-spacing: .5px;
+  }
+  .FACT { background: rgba(63,185,80,.15); color: var(--fact); border: 1px solid rgba(63,185,80,.35); }
+  .INFERENCE { background: rgba(210,153,34,.15); color: var(--inference); border: 1px solid rgba(210,153,34,.35); }
+  .UNKNOWN { background: rgba(107,115,131,.15); color: var(--unknown); border: 1px solid rgba(107,115,131,.35); }
+  .verdict { background: rgba(248,81,73,.12); color: var(--bad); border: 1px solid rgba(248,81,73,.3); }
+  .verdict.SUPPORTED { background: rgba(63,185,80,.12); color: var(--fact); border-color: rgba(63,185,80,.3); }
+  .entity { border: 1px solid var(--line); border-radius: 9px; margin-bottom: 14px; overflow: hidden; }
+  .entity > .head { background: var(--panel-2); padding: 12px 14px; display: flex; justify-content: space-between; align-items: center; gap: 10px; }
+  .entity h3 { margin: 0; font-size: 15px; }
+  .claim { border-top: 1px solid var(--line); padding: 12px 14px; }
+  .claim-text { margin: 6px 0; }
+  .meta { font-size: 12px; color: var(--dim); font-family: var(--mono); }
+  blockquote {
+    margin: 8px 0 0; padding: 8px 12px; border-left: 3px solid var(--accent);
+    background: var(--bg); font-size: 13px; color: var(--muted); border-radius: 0 6px 6px 0;
+  }
+  blockquote cite { display: block; margin-top: 5px; font-size: 11px; color: var(--dim); font-style: normal; font-family: var(--mono); }
+  .warn { background: rgba(210,153,34,.08); border: 1px solid rgba(210,153,34,.3); color: #e3b341; padding: 10px 12px; border-radius: 7px; font-size: 13px; margin-bottom: 8px; }
+  .metrics { display: flex; gap: 20px; flex-wrap: wrap; font-family: var(--mono); font-size: 12px; color: var(--muted); }
+  .metrics b { color: var(--text); display: block; font-size: 16px; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th, td { text-align: left; padding: 8px; border-bottom: 1px solid var(--line); }
+  th { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .5px; }
+  a { color: var(--accent); }
+  .empty { color: var(--dim); font-style: italic; padding: 10px 0; }
+  details summary { cursor: pointer; color: var(--muted); font-size: 13px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Groundwork</h1>
+  <span class="tag">Evidence-grounded research agent · every claim traced to a verbatim source</span>
+</header>
+
+<main>
+  <section class="panel">
+    <label for="objective">Research objective</label>
+    <textarea id="objective" placeholder="Find technical wholesalers in Gelderland that still process orders manually."></textarea>
+
+    <label for="criteria">Qualification criteria (one per line)</label>
+    <textarea id="criteria" placeholder="Headquartered in Gelderland&#10;Operates as a technical wholesaler"></textarea>
+
+    <div class="row">
+      <div>
+        <label for="maxEntities">Max entities</label>
+        <input type="number" id="maxEntities" value="3" min="1" max="25" />
+      </div>
+      <div>
+        <label for="maxRounds">Max search rounds</label>
+        <input type="number" id="maxRounds" value="2" min="1" max="6" />
+      </div>
+      <div>
+        <label for="apiKey">API key (optional)</label>
+        <input type="text" id="apiKey" placeholder="only if server requires it" />
+      </div>
+    </div>
+
+    <button id="run">Start research</button>
+    <button id="refresh" class="ghost">Refresh history</button>
+    <div class="status" id="status" style="margin-top:12px"></div>
+  </section>
+
+  <section class="panel" id="resultPanel" hidden>
+    <h2 style="margin-top:0;font-size:16px">Result</h2>
+    <div class="metrics" id="metrics"></div>
+    <div id="warnings" style="margin-top:14px"></div>
+    <div id="entities" style="margin-top:14px"></div>
+    <div id="insights"></div>
+    <div id="approval"></div>
+    <details style="margin-top:14px">
+      <summary>Sources fetched</summary>
+      <div id="sources" style="margin-top:10px"></div>
+    </details>
+    <details style="margin-top:8px">
+      <summary>Plan</summary>
+      <div id="plan" style="margin-top:10px"></div>
+    </details>
+  </section>
+
+  <section class="panel">
+    <h2 style="margin-top:0;font-size:16px">Previous research</h2>
+    <div id="history"></div>
+  </section>
+</main>
+
+<script>
+const $ = (id) => document.getElementById(id);
+let pollTimer = null;
+let currentJob = null;
+
+function headers() {
+  const h = { "Content-Type": "application/json" };
+  const k = $("apiKey").value.trim();
+  if (k) h["X-API-Key"] = k;
+  return h;
+}
+
+function esc(s) {
+  return String(s ?? "").replace(/[&<>"']/g, c => (
+    { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]
+  ));
+}
+
+async function startResearch() {
+  const objective = $("objective").value.trim();
+  if (objective.length < 10) { setStatus("Objective must be at least 10 characters."); return; }
+
+  const body = {
+    objective,
+    criteria: $("criteria").value.split("\n").map(s => s.trim()).filter(Boolean),
+    max_entities: Number($("maxEntities").value),
+    max_search_rounds: Number($("maxRounds").value),
+    require_approval: true
+  };
+
+  $("run").disabled = true;
+  setStatus("Submitting…");
+  try {
+    const res = await fetch("/api/research", { method: "POST", headers: headers(), body: JSON.stringify(body) });
+    if (!res.ok) throw new Error(`${res.status} ${await res.text()}`);
+    currentJob = (await res.json()).job_id;
+    setStatus(`Job ${currentJob} started. Polling…`);
+    poll();
+  } catch (e) {
+    setStatus("Error: " + e.message);
+    $("run").disabled = false;
+  }
+}
+
+function poll() {
+  clearInterval(pollTimer);
+  pollTimer = setInterval(async () => {
+    if (!currentJob) return;
+    const res = await fetch(`/api/research/${currentJob}`);
+    if (!res.ok) return;
+    const job = await res.json();
+    setStatus(`Job ${currentJob} — status: ${job.status}`);
+    if (["AWAITING_APPROVAL", "COMPLETED", "APPROVED", "REJECTED", "FAILED"].includes(job.status)) {
+      clearInterval(pollTimer);
+      $("run").disabled = false;
+      if (job.status === "FAILED") setStatus("Run failed: " + (job.error || "unknown error"));
+      else render(job);
+      loadHistory();
+    }
+  }, 1200);
+}
+
+function setStatus(msg) { $("status").textContent = msg; }
+
+function render(job) {
+  const r = job.result;
+  if (!r) { setStatus("No result payload."); return; }
+  $("resultPanel").hidden = false;
+
+  const m = r.metrics || {};
+  const claims = (r.entities || []).flatMap(e => e.claims || []);
+  const facts = claims.filter(c => c.status === "FACT").length;
+  $("metrics").innerHTML = [
+    ["Entities", (r.entities || []).length],
+    ["Claims", claims.length],
+    ["FACT claims", facts],
+    ["Sources", (r.sources || []).length],
+    ["LLM calls", m.llm_calls ?? 0],
+    ["Latency", (m.latency_ms ?? 0) + " ms"],
+    ["Est. cost", "$" + (m.estimated_cost_usd ?? 0).toFixed(4)]
+  ].map(([k, v]) => `<div><b>${esc(v)}</b>${esc(k)}</div>`).join("");
+
+  $("warnings").innerHTML = (r.warnings || []).length
+    ? r.warnings.map(w => `<div class="warn">${esc(w)}</div>`).join("")
+    : "";
+
+  const evById = Object.fromEntries((r.evidence || []).map(e => [e.id, e]));
+  const srcById = Object.fromEntries((r.sources || []).map(s => [s.id, s]));
+
+  $("entities").innerHTML = (r.entities || []).length ? r.entities.map(ent => {
+    const q = ent.qualification;
+    const claimsHtml = (ent.claims || []).map(c => {
+      const ev = (c.evidence_ids || []).map(id => evById[id]).filter(Boolean);
+      const quotes = ev.map(e => {
+        const s = srcById[e.source_id];
+        return `<blockquote>“${esc(e.quote)}”
+          <cite>${esc(s ? s.domain : "unknown")} · ${e.verbatim_verified ? "verified verbatim" : "UNVERIFIED"}
+          ${s ? `· <a href="${esc(s.url)}" target="_blank" rel="noopener">source</a>` : ""}</cite>
+        </blockquote>`;
+      }).join("");
+      const verdict = c.verdict ? `<span class="pill verdict ${esc(c.verdict)}">${esc(c.verdict)}</span>` : "";
+      return `<div class="claim">
+        <span class="pill ${esc(c.status)}">${esc(c.status)}</span> ${verdict}
+        <div class="claim-text">${esc(c.text)}</div>
+        <div class="meta">confidence ${Number(c.confidence).toFixed(2)}${c.critic_note ? " · " + esc(c.critic_note) : ""}</div>
+        ${quotes || '<div class="meta">no evidence attached</div>'}
+      </div>`;
+    }).join("");
+    return `<div class="entity">
+      <div class="head">
+        <h3>${esc(ent.name)}</h3>
+        ${q ? `<span class="pill ${q.decision === "QUALIFIED" ? "FACT" : q.decision === "NOT_QUALIFIED" ? "verdict" : "INFERENCE"}">${esc(q.decision)}</span>` : ""}
+      </div>
+      ${q && q.rationale ? `<div class="claim"><div class="meta">${esc(q.rationale)}</div></div>` : ""}
+      ${claimsHtml || '<div class="claim empty">No claims extracted.</div>'}
+    </div>`;
+  }).join("") : '<div class="empty">No entities found. For an adversarial or unanswerable objective, this is the correct outcome.</div>';
+
+  $("insights").innerHTML = (r.insights || []).length
+    ? `<h3 style="font-size:14px">Insights <span class="pill INFERENCE">INFERENCE</span></h3>` +
+      r.insights.map(i => `<div class="claim">${esc(i.text)}<div class="meta">confidence ${Number(i.confidence).toFixed(2)}</div></div>`).join("")
+    : "";
+
+  $("sources").innerHTML = (r.sources || []).length ? `<table><tr><th>Domain</th><th>Tier</th><th>Chars</th><th>Flags</th></tr>` +
+    r.sources.map(s => `<tr>
+      <td><a href="${esc(s.url)}" target="_blank" rel="noopener">${esc(s.domain)}</a></td>
+      <td>${esc(s.tier)}</td><td>${esc(s.char_count)}</td>
+      <td>${(s.injection_flags || []).length ? `<span class="pill verdict">${esc(s.injection_flags.join(", "))}</span>` : "—"}</td>
+    </tr>`).join("") + `</table>` : '<div class="empty">No sources.</div>';
+
+  $("plan").innerHTML = (r.plan || []).length
+    ? "<ol>" + r.plan.map(p => `<li>${esc(p)}</li>`).join("") + "</ol>"
+    : '<div class="empty">No plan recorded.</div>';
+
+  $("approval").innerHTML = job.status === "AWAITING_APPROVAL"
+    ? `<div class="panel" style="margin-top:14px;background:var(--panel-2)">
+        <strong>Human review required</strong>
+        <div class="meta" style="margin:6px 0 10px">Nothing is sent or acted on until you decide.</div>
+        <input type="text" id="reviewer" placeholder="Your name" />
+        <input type="text" id="note" placeholder="Optional note" style="margin-top:8px" />
+        <div><button class="ok" onclick="decide(true)">Approve</button>
+        <button class="no" onclick="decide(false)">Reject</button></div>
+      </div>`
+    : job.approved_by
+      ? `<div class="meta" style="margin-top:14px">Decision: <strong>${esc(job.status)}</strong> by ${esc(job.approved_by)}${job.approval_note ? " — " + esc(job.approval_note) : ""}</div>`
+      : "";
+}
+
+async function decide(approved) {
+  const reviewer = ($("reviewer") && $("reviewer").value.trim()) || "";
+  if (!reviewer) { alert("Please enter your name — decisions are attributed."); return; }
+  const res = await fetch(`/api/research/${currentJob}/decision`, {
+    method: "POST", headers: headers(),
+    body: JSON.stringify({ approved, reviewer, note: ($("note") && $("note").value) || "" })
+  });
+  if (!res.ok) { alert("Decision failed: " + await res.text()); return; }
+  const job = await (await fetch(`/api/research/${currentJob}`)).json();
+  render(job); loadHistory();
+}
+
+async function loadHistory() {
+  const res = await fetch("/api/research?limit=25");
+  if (!res.ok) return;
+  const jobs = await res.json();
+  $("history").innerHTML = jobs.length ? `<table>
+    <tr><th>Objective</th><th>Status</th><th>Entities</th><th>Claims</th><th>Unsupported</th><th>Cost</th></tr>` +
+    jobs.map(j => `<tr>
+      <td><a href="#" onclick="open_('${esc(j.job_id)}');return false">${esc(j.objective.slice(0, 70))}${j.objective.length > 70 ? "…" : ""}</a></td>
+      <td>${esc(j.status)}</td><td>${j.entity_count}</td><td>${j.claim_count}</td>
+      <td>${(j.unsupported_rate * 100).toFixed(0)}%</td><td>$${j.estimated_cost_usd.toFixed(4)}</td>
+    </tr>`).join("") + `</table>` : '<div class="empty">No previous research yet.</div>';
+}
+
+async function open_(id) {
+  currentJob = id;
+  const job = await (await fetch(`/api/research/${id}`)).json();
+  setStatus(`Job ${id} — status: ${job.status}`);
+  render(job);
+  window.scrollTo({ top: 0, behavior: "smooth" });
+}
+
+$("run").addEventListener("click", startResearch);
+$("refresh").addEventListener("click", loadHistory);
+loadHistory();
+</script>
+</body>
+</html>
