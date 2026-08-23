@@ -7,7 +7,7 @@ Simplest option: one `result_json` column per job. Fast to write, and adequate
 for rendering a single result.
 
 ## Decision
-Normalised tables for `sources`, `entities`, `claims`, `evidence` — plus the
+Normalised tables for `sources`, `entities`, `claims`, `evidence`, plus the
 denormalised `result_json` snapshot.
 
 ## Rationale
@@ -24,5 +24,5 @@ happen. Classic write-model / read-model split.
 - Two representations to keep consistent; both are written in one transaction in
   `save_result`.
 - Schema is created with `Base.metadata.create_all`. That is not a migration
-  strategy — a production system needs Alembic. Listed under Limitations rather
+  strategy: a production system needs Alembic. Listed under Limitations rather
   than glossed over.

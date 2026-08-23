@@ -5,7 +5,7 @@
 ## Context
 The system's value proposition is that its output can be audited. That requires
 a mechanism that distinguishes "the source says this" from "the model believes
-this". Self-reported confidence does not do that — a hallucination is often
+this". Self-reported confidence does not do that: a hallucination is often
 reported confidently.
 
 ## Options considered

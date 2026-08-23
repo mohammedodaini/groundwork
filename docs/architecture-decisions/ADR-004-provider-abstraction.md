@@ -19,4 +19,4 @@ implementations used by the entire test suite.
   prove the abstraction is real rather than aspirational.
 - Cost: one more indirection layer, and `FakeLLM` mocks the transport, not the
   intelligence. Tests verify how the graph handles good, malformed and failing
-  responses — not whether a real model would produce them.
+  responses: not whether a real model would produce them.

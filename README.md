@@ -1,6 +1,6 @@
 # Groundwork
 
-**An evidence-grounded research agent. Every claim is labelled `FACT` / `INFERENCE` / `UNKNOWN`, and every `FACT` is traced to a quote verified — character by character — against the page it came from.**
+**An evidence-grounded research agent. Every claim is labelled `FACT` / `INFERENCE` / `UNKNOWN`, and every `FACT` is traced to a quote verified, character by character, against the page it came from.**
 
 ```
 Objective ──▶ Plan ──▶ Search & Fetch ──▶ Extract ──▶ Critic ──▶ Reflect ──▶ Qualify ──▶ Human review
@@ -12,7 +12,7 @@ Objective ──▶ Plan ──▶ Search & Fetch ──▶ Extract ──▶ Cr
 
 ## Why this exists
 
-Most "AI research agents" return fluent prose. Prose cannot be audited. You cannot tell which sentence came from a source, which the model inferred, and which it invented — so you cannot trust any of it, and you cannot *measure* whether it is improving.
+Most "AI research agents" return fluent prose. Prose cannot be audited. You cannot tell which sentence came from a source, which the model inferred, and which it invented, so you cannot trust any of it, and you cannot *measure* whether it is improving.
 
 Groundwork forces a different output shape. The system may only assert **claims**, and every claim must declare how it is known:
 
@@ -22,13 +22,13 @@ Groundwork forces a different output shape. The system may only assert **claims*
 | `INFERENCE` | Reasoned from evidence; no source states it directly | Shown as reasoning, never as fact |
 | `UNKNOWN` | Relevant, looked for, not established | An honest non-answer |
 
-A claim asserted as `FACT` whose quote does not appear in the source is **automatically downgraded** — by deterministic string matching, not by asking another model whether the first model was honest. That single mechanism is what makes the evaluation metrics here meaningful.
+A claim asserted as `FACT` whose quote does not appear in the source is **automatically downgraded**, by deterministic string matching, not by asking another model whether the first model was honest. That single mechanism is what makes the evaluation metrics here meaningful.
 
 ### The concept was changed deliberately
 
 The original brief was lead generation ("find companies that could benefit from AI automation"). I changed the core framing for one engineering reason: **"could benefit from AI automation" is unfalsifiable.** You cannot build a benchmark for it, so you cannot demonstrate the system works. Grounded claim extraction *is* measurable, so evaluation becomes real rather than decorative.
 
-Lead qualification survives as one *use case* of a general engine — the `criteria` field and the `qualify` node — rather than as the whole product.
+Lead qualification survives as one *use case* of a general engine, the `criteria` field and the `qualify` node, rather than as the whole product.
 
 ---
 
@@ -84,7 +84,7 @@ flowchart TD
     style K fill:#d29922,color:#000
 ```
 
-### Where the LLM is used — and where it deliberately is not
+### Where the LLM is used, and where it deliberately is not
 
 This is the core design judgement of the project ([ADR-002](docs/architecture-decisions/ADR-002-agent-boundaries.md)).
 
@@ -113,15 +113,15 @@ def route_after_reflect(state: ResearchState) -> str:
 
 Bounded three ways, because an agent that can loop must terminate for reasons independent of the model's judgement:
 
-1. `max_search_rounds` — checked *before* the LLM call, so the model cannot argue for another round
-2. LangGraph `recursion_limit=50` — framework backstop
+1. `max_search_rounds`: checked *before* the LLM call, so the model cannot argue for another round
+2. LangGraph `recursion_limit=50`, framework backstop
 3. Fail-closed error containment (below)
 
 ### Three real bugs found in review
 
 **1. Fail-open error containment caused an infinite loop.**
 
-During development, a raising `reflect` node returned only `{"errors": [...]}`. That left `should_continue_research` at its previous value — `True` — so **a failing node caused an infinite research loop** until the recursion limit tripped. In production each iteration costs money.
+During development, a raising `reflect` node returned only `{"errors": [...]}`. That left `should_continue_research` at its previous value, `True`, so **a failing node caused an infinite research loop** until the recursion limit tripped. In production each iteration costs money.
 
 The fix generalises: *error containment must also reset any state the router depends on.*
 
@@ -136,15 +136,15 @@ Covered by `test_node_exception_is_contained`.
 
 **2. Sources with no verified evidence were re-extracted every round.**
 
-"Already processed" was *derived* from the evidence list. A source whose quotes all failed verbatim verification produces no evidence — so it looked unprocessed, was re-extracted on every subsequent round, and appended duplicate claims. One source began to look like several corroborating ones, which is precisely the failure this project exists to prevent.
+"Already processed" was *derived* from the evidence list. A source whose quotes all failed verbatim verification produces no evidence, so it looked unprocessed, was re-extracted on every subsequent round, and appended duplicate claims. One source began to look like several corroborating ones, which is precisely the failure this project exists to prevent.
 
 Fixed by tracking `processed_source_ids` explicitly in graph state. The lesson: *derived state is a lie whenever the thing you derive it from is allowed to be empty.* Covered by `test_source_is_not_reextracted_across_rounds`.
 
 **3. The critic re-audited every earlier claim on each new round.**
 
-Claims accumulate across rounds, but the critic ran over *all* of them each time — duplicating critic notes, overwriting confidence repeatedly, and spending tokens re-judging settled claims. Found by running `scripts/demo.py` and noticing notes that read `"Quote states the claim. | Quote states the claim."`
+Claims accumulate across rounds, but the critic ran over *all* of them each time, duplicating critic notes, overwriting confidence repeatedly, and spending tokens re-judging settled claims. Found by running `scripts/demo.py` and noticing notes that read `"Quote states the claim. | Quote states the claim."`
 
-Fixed by skipping claims that already carry a verdict. Worth noting the test suite did **not** catch this — a demo exercising the real graph did. Now covered by `test_claims_are_not_reaudited_across_rounds`.
+Fixed by skipping claims that already carry a verdict. Worth noting the test suite did **not** catch this: a demo exercising the real graph did. Now covered by `test_claims_are_not_reaudited_across_rounds`.
 
 ---
 
@@ -152,17 +152,17 @@ Fixed by skipping claims that already carry a verdict. Worth noting the test sui
 
 The system fetches attacker-controllable pages and puts their text into an LLM prompt. That is both a prompt-injection and an SSRF surface. Both are addressed; neither is claimed solved.
 
-### Prompt injection — defence in depth
+### Prompt injection: defence in depth
 
 | Layer | Mechanism |
 | --- | --- |
 | **Capability isolation** | Extraction and critic LLM calls have **no tools bound**. This is the layer that actually matters: a perfect injection has nothing to call. |
 | **Structural isolation** | Untrusted text is wrapped in a **nonce-tagged** block (`<WEB_CONTENT id="a3f9…">`). A static delimiter can be closed by an attacker writing `</document>`; a per-call random nonce cannot be guessed from inside the page. |
 | **Detection** | Seven pattern families: instruction override, role injection, chat markup, tool coercion, exfiltration, verdict coercion, hidden directives. Flagged sources are **down-tiered and surfaced in the UI**. |
-| **Neutralisation** | Zero-width and bidi-override characters stripped; fake role markers and chat-template tokens defanged — *without deleting words*, so quotes still verify. |
+| **Neutralisation** | Zero-width and bidi-override characters stripped; fake role markers and chat-template tokens defanged, *without deleting words*, so quotes still verify. |
 | **Evidence rejection** | The critic marks any claim whose evidence comes only from injection-flagged pages as `UNSUPPORTED`. |
 
-**Residual risk, stated plainly:** a sufficiently novel injection can still influence what the extractor reports. The mitigation that holds regardless is capability isolation — influencing the *text* of a claim is bounded damage when the system cannot take actions. Detection is heuristic and will have false negatives.
+**Residual risk, stated plainly:** a sufficiently novel injection can still influence what the extractor reports. The mitigation that holds regardless is capability isolation, influencing the *text* of a claim is bounded damage when the system cannot take actions. Detection is heuristic and will have false negatives.
 
 ### SSRF
 
@@ -170,7 +170,7 @@ An agent fetching model-suggested URLs is an SSRF primitive; on cloud hosts `169
 
 - Scheme allowlist (`http`/`https` only)
 - Blocks loopback, private, link-local, multicast, reserved ranges, and cloud metadata IPs
-- **DNS rebinding defence:** the hostname is resolved and *every* returned address is checked — a hostname-only blocklist misses `evil.com → 127.0.0.1`
+- **DNS rebinding defence:** the hostname is resolved and *every* returned address is checked: a hostname-only blocklist misses `evil.com → 127.0.0.1`
 - Credentials-in-URL rejected; redirects capped at 3; responses capped at 5 MB
 
 ### Other controls
@@ -186,7 +186,7 @@ Optional `X-API-Key` with **constant-time comparison** (a naive `!=` leaks key m
 > The harness, scorers and an 8-task benchmark set are implemented and tested. **No real-provider results are published, because I have not run them yet.** To generate them:
 >
 > ```bash
-> make eval          # writes docs/eval-results.md — measured numbers only
+> make eval          # writes docs/eval-results.md, measured numbers only
 > make eval-fake     # smoke-tests the harness at zero cost
 > ```
 >
@@ -196,16 +196,16 @@ Optional `X-API-Key` with **constant-time comparison** (a naive `!=` leaks key m
 
 Metrics are split by trustworthiness and labelled as such:
 
-**Intrinsic — deterministic, fully reproducible:**
-- **Quote verification rate** — share of model-produced quotes that actually appear in the source. *The most direct measure of fabrication.*
-- **Evidence coverage** — share of `FACT` claims carrying a verified quote
+**Intrinsic, deterministic, fully reproducible:**
+- **Quote verification rate**: share of model-produced quotes that actually appear in the source. *The most direct measure of fabrication.*
+- **Evidence coverage**: share of `FACT` claims carrying a verified quote
 - Latency, LLM calls, token counts, estimated cost
 
-**Referenced — against hand-written dataset expectations:**
-- **Known-false claim count** — per-task canary strings. Any value above zero is an uncaught hallucination.
+**Referenced, against hand-written dataset expectations:**
+- **Known-false claim count**: per-task canary strings. Any value above zero is an uncaught hallucination.
 - Expected-entity recall
 
-**Partly LLM-judged — treat as indicative:**
+**Partly LLM-judged, treat as indicative:**
 - Unsupported-claim rate from the critic
 
 There is deliberately **no single "factual accuracy" score.** It would be the most impressive-sounding number here and the least trustworthy: an LLM judge's output reported as ground truth.
@@ -214,9 +214,9 @@ There is deliberately **no single "factual accuracy" score.** It would be the mo
 
 8 tasks in `src/groundwork/evaluation/datasets/benchmark.jsonl`, including three adversarial:
 
-- **`nonexistent-company`** — researches a company that does not exist. Correct behaviour is `UNKNOWN` claims and `INSUFFICIENT_EVIDENCE`. *The most diagnostic task in the set.*
-- **`contradictory-figures`** — sources genuinely disagree; tests whether contradiction is surfaced or silently resolved
-- **`injection-canary`** — pages about prompt injection legitimately contain injection strings
+- **`nonexistent-company`**: researches a company that does not exist. Correct behaviour is `UNKNOWN` claims and `INSUFFICIENT_EVIDENCE`. *The most diagnostic task in the set.*
+- **`contradictory-figures`**: sources genuinely disagree; tests whether contradiction is surfaced or silently resolved
+- **`injection-canary`**: pages about prompt injection legitimately contain injection strings
 
 ---
 
@@ -267,7 +267,7 @@ src/groundwork/
 └── main.py          FastAPI, auth, rate limiting, HITL gate
 ```
 
-Eight ADRs in `docs/architecture-decisions/` record *why* each significant choice was made — including the ones rejected.
+Eight ADRs in `docs/architecture-decisions/` record *why* each significant choice was made, including the ones rejected.
 
 ---
 
@@ -281,14 +281,14 @@ Stated because a portfolio project claiming no weaknesses is not credible.
 4. **`create_all()` is not a migration strategy.** Production needs Alembic.
 5. **Background jobs are in-process asyncio tasks.** A restart loses running jobs; real deployment needs a queue.
 6. **Rate limiting is per-process.** Multi-worker needs Redis.
-7. **HTML extraction is minimal** and dependency-free — worse recall than trafilatura on complex pages.
+7. **HTML extraction is minimal** and dependency-free, worse recall than trafilatura on complex pages.
 8. **The injection detector is heuristic** and English-biased; it will have false negatives.
 9. **Traces are in-memory** and lost on restart.
 10. **Source tiering is a domain-suffix rule**, so it misjudges unusual sites.
 
 ## Future work
 
-Alembic migrations · Redis-backed queue and rate limiting · Langfuse exporter via the existing `on_span` hook · pgvector for cross-run entity resolution (only if a real need appears — see [ADR-008](docs/architecture-decisions/ADR-008-normalised-persistence.md)) · human-labelled ground truth to calibrate confidence · multilingual injection patterns for Dutch and German sources.
+Alembic migrations · Redis-backed queue and rate limiting · Langfuse exporter via the existing `on_span` hook · pgvector for cross-run entity resolution (only if a real need appears, see [ADR-008](docs/architecture-decisions/ADR-008-normalised-persistence.md)) · human-labelled ground truth to calibrate confidence · multilingual injection patterns for Dutch and German sources.
 
 ---
 

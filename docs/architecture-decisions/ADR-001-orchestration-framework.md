@@ -11,7 +11,7 @@ bounded loop, and per-step observability.
 ## Options considered
 1. **Plain `async` functions in a `while` loop.** Fewest dependencies. But we
    would hand-write state merging, loop bounds, per-node error containment and
-   tracing — and we would get the merge semantics subtly wrong first time.
+   tracing, and we would get the merge semantics subtly wrong first time.
 2. **LangChain AgentExecutor / ReAct.** The model chooses tools freely. Wrong
    shape here: our control flow is *known*. Plan → gather → extract → critic is
    not something a model should re-derive on every run, and letting it do so
