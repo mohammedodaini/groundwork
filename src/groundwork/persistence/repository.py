@@ -197,9 +197,7 @@ class ResearchRepository:
                         )
                     )
 
-    async def decide(
-        self, job_id: str, *, approved: bool, reviewer: str, note: str = ""
-    ) -> bool:
+    async def decide(self, job_id: str, *, approved: bool, reviewer: str, note: str = "") -> bool:
         """Record a human approval decision. Returns False if not pending."""
         from datetime import datetime
 
@@ -207,9 +205,7 @@ class ResearchRepository:
             row = await s.get(JobRow, job_id)
             if row is None or row.status != JobStatus.AWAITING_APPROVAL.value:
                 return False
-            row.status = (
-                JobStatus.APPROVED.value if approved else JobStatus.REJECTED.value
-            )
+            row.status = JobStatus.APPROVED.value if approved else JobStatus.REJECTED.value
             row.approved_by = reviewer[:200]
             row.approval_note = note[:4000]
             row.decided_at = datetime.now(UTC)
@@ -221,9 +217,7 @@ class ResearchRepository:
 
     async def list_jobs(self, *, limit: int = 50) -> list[JobRow]:
         async with self.db.session() as s:
-            res = await s.execute(
-                select(JobRow).order_by(JobRow.created_at.desc()).limit(limit)
-            )
+            res = await s.execute(select(JobRow).order_by(JobRow.created_at.desc()).limit(limit))
             return list(res.scalars().all())
 
     async def unsupported_claims(self, *, limit: int = 100) -> list[ClaimRow]:

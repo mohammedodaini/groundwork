@@ -53,16 +53,35 @@ class SearchError(RuntimeError):
 _REPUTABLE_SUFFIXES = (".gov", ".edu", ".ac.uk", ".europa.eu", ".overheid.nl")
 _REPUTABLE_DOMAINS = frozenset(
     {
-        "reuters.com", "apnews.com", "bbc.co.uk", "ft.com", "economist.com",
-        "nature.com", "science.org", "arxiv.org", "nos.nl", "nrc.nl",
-        "volkskrant.nl", "fd.nl", "kvk.nl", "cbs.nl",
+        "reuters.com",
+        "apnews.com",
+        "bbc.co.uk",
+        "ft.com",
+        "economist.com",
+        "nature.com",
+        "science.org",
+        "arxiv.org",
+        "nos.nl",
+        "nrc.nl",
+        "volkskrant.nl",
+        "fd.nl",
+        "kvk.nl",
+        "cbs.nl",
     }
 )
 _SECONDARY_DOMAINS = frozenset(
     {
-        "wikipedia.org", "medium.com", "reddit.com", "quora.com",
-        "linkedin.com", "facebook.com", "x.com", "twitter.com",
-        "crunchbase.com", "glassdoor.com", "yelp.com",
+        "wikipedia.org",
+        "medium.com",
+        "reddit.com",
+        "quora.com",
+        "linkedin.com",
+        "facebook.com",
+        "x.com",
+        "twitter.com",
+        "crunchbase.com",
+        "glassdoor.com",
+        "yelp.com",
     }
 )
 
@@ -296,8 +315,12 @@ def html_to_text(html: str) -> str:
     text = _TAG_STRIP.sub(" ", html)
     text = _TAGS.sub(" ", text)
     for entity, char in (
-        ("&nbsp;", " "), ("&amp;", "&"), ("&lt;", "<"),
-        ("&gt;", ">"), ("&quot;", '"'), ("&#39;", "'"),
+        ("&nbsp;", " "),
+        ("&amp;", "&"),
+        ("&lt;", "<"),
+        ("&gt;", ">"),
+        ("&quot;", '"'),
+        ("&#39;", "'"),
     ):
         text = text.replace(entity, char)
     text = re.sub(r"[ \t]+", " ", text)
@@ -323,7 +346,6 @@ class ContentFetcher:
         self.settings = settings
         self._client = client
         self.fetch_count = 0
-
 
     async def _get_validating_redirects(
         self, client: httpx.AsyncClient, url: str
@@ -355,9 +377,7 @@ class ContentFetcher:
             # current URL before validating, or a bare "/admin" would be
             # unparseable rather than correctly rejected.
             current = str(httpx.URL(current).join(location))
-        raise UnsafeURLError(
-            f"Exceeded {MAX_REDIRECTS} redirects starting from {url!r}"
-        )
+        raise UnsafeURLError(f"Exceeded {MAX_REDIRECTS} redirects starting from {url!r}")
 
     async def fetch(self, url: str, *, entity_domain: str | None = None) -> FetchResult | None:
         """Return sanitized content, or None if the URL is unsafe/unfetchable.

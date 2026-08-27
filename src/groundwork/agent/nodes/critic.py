@@ -76,9 +76,7 @@ def structural_audit(
         # Bind to a new name so the type narrows: reassigning `srcs` keeps the
         # Optional in the element type and hides genuine None bugs.
         resolved = [
-            src
-            for src in (sources_by_id.get(str(e.source_id)) for e in linked)
-            if src is not None
+            src for src in (sources_by_id.get(str(e.source_id)) for e in linked) if src is not None
         ]
         if resolved and all(s.injection_flags for s in resolved):
             return (
@@ -170,9 +168,7 @@ async def critic_node(state: ResearchState, *, llm: LLMProvider) -> dict:
             logger.warning("critic_failed", extra={"error": str(exc)})
             warnings.append(f"Critic LLM failed on a batch ({exc}); claims left unverified.")
             for claim in batch:
-                claim.critic_note = (
-                    claim.critic_note + " | critic unavailable"
-                ).strip(" |")
+                claim.critic_note = (claim.critic_note + " | critic unavailable").strip(" |")
             continue
 
         seen: set[int] = set()
@@ -184,16 +180,22 @@ async def critic_node(state: ResearchState, *, llm: LLMProvider) -> dict:
             claim.verdict = v.verdict
             claim.critic_note = (claim.critic_note + " | " + v.note).strip(" |")
             claim.confidence = v.adjusted_confidence
-            if v.verdict in {
-                VerificationVerdict.UNSUPPORTED,
-                VerificationVerdict.CONTRADICTED,
-            } and claim.status is EpistemicStatus.FACT:
+            if (
+                v.verdict
+                in {
+                    VerificationVerdict.UNSUPPORTED,
+                    VerificationVerdict.CONTRADICTED,
+                }
+                and claim.status is EpistemicStatus.FACT
+            ):
                 claim.status = EpistemicStatus.INFERENCE
 
         # A critic that skips claims is a silent failure; make it loud.
         for idx, claim in enumerate(batch):
             if idx not in seen:
-                claim.critic_note = (claim.critic_note + " | critic returned no verdict").strip(" |")
+                claim.critic_note = (claim.critic_note + " | critic returned no verdict").strip(
+                    " |"
+                )
                 warnings.append(f"Critic returned no verdict for claim: {claim.text[:60]!r}")
 
     total = sum(len(e.claims) for e in entities)

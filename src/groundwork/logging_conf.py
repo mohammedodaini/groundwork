@@ -26,9 +26,11 @@ _SECRET_PATTERNS = [
     re.compile(r"((?:api[_-]?key|token|secret|password)\"?\s*[:=]\s*\"?)([^\s\",}]{6,})"),
 ]
 
-_RESERVED = frozenset(
-    vars(logging.LogRecord("", 0, "", 0, "", (), None)).keys()
-) | {"message", "asctime", "taskName"}
+_RESERVED = frozenset(vars(logging.LogRecord("", 0, "", 0, "", (), None)).keys()) | {
+    "message",
+    "asctime",
+    "taskName",
+}
 
 
 def redact(text: str) -> str:

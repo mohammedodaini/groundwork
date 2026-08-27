@@ -38,9 +38,7 @@ async def _make_result(settings, request_obj):
     engine = ResearchEngine(
         settings=settings,
         llm=FakeLLM(settings, responses=happy_path_responses()),
-        search=FakeSearch(
-            settings, default=[SearchHit(url="https://acme-wholesale.nl/about")]
-        ),
+        search=FakeSearch(settings, default=[SearchHit(url="https://acme-wholesale.nl/about")]),
         fetcher=StubFetcher(settings),
     )
     return await engine.run(request_obj)
@@ -205,10 +203,7 @@ def test_api_key_enforced_when_configured(monkeypatch):
     with TestClient(create_app()) as c:
         body = {"objective": "A perfectly valid research objective here."}
         assert c.post("/api/research", json=body).status_code == 401
-        assert (
-            c.post("/api/research", json=body, headers={"X-API-Key": "wrong"}).status_code
-            == 401
-        )
+        assert c.post("/api/research", json=body, headers={"X-API-Key": "wrong"}).status_code == 401
         assert (
             c.post("/api/research", json=body, headers={"X-API-Key": "secret-key"}).status_code
             == 202

@@ -147,9 +147,7 @@ def test_blocks_multi_record_rebinding() -> None:
 
 def test_blocks_credentials_in_url() -> None:
     with pytest.raises(UnsafeURLError, match="Credentials"):
-        assert_url_is_safe(
-            "https://user:pass@example.com/", resolver=lambda h: ["93.184.216.34"]
-        )
+        assert_url_is_safe("https://user:pass@example.com/", resolver=lambda h: ["93.184.216.34"])
 
 
 def test_unresolvable_host_is_rejected() -> None:
@@ -257,9 +255,7 @@ async def test_relative_redirect_is_resolved_before_validation(public_dns) -> No
     def routes(request: httpx.Request) -> httpx.Response:
         if request.url.path == "/start":
             return httpx.Response(302, headers={"location": "/moved"})
-        return httpx.Response(
-            200, headers={"content-type": "text/html"}, text="<p>Arrived.</p>"
-        )
+        return httpx.Response(200, headers={"content-type": "text/html"}, text="<p>Arrived.</p>")
 
     fetcher, _ = _fetcher_recording_hosts(routes)
     result = await fetcher.fetch("https://example.com/start")

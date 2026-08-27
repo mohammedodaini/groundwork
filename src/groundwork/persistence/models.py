@@ -59,9 +59,7 @@ class JobRow(Base):
     # Human-in-the-loop
     approved_by: Mapped[str | None] = mapped_column(String(200), nullable=True)
     approval_note: Mapped[str | None] = mapped_column(Text, nullable=True)
-    decided_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True
-    )
+    decided_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     # Metrics, flattened for cheap aggregate queries across runs
     latency_ms: Mapped[int] = mapped_column(Integer, default=0)
@@ -147,9 +145,7 @@ class EvidenceRow(Base):
     claim_id: Mapped[str | None] = mapped_column(
         ForeignKey("claims.id", ondelete="CASCADE"), index=True, nullable=True
     )
-    source_id: Mapped[str] = mapped_column(
-        ForeignKey("sources.id", ondelete="CASCADE"), index=True
-    )
+    source_id: Mapped[str] = mapped_column(ForeignKey("sources.id", ondelete="CASCADE"), index=True)
     quote: Mapped[str] = mapped_column(Text)
     start_char: Mapped[int | None] = mapped_column(Integer, nullable=True)
     verbatim_verified: Mapped[bool] = mapped_column(Boolean, default=False, index=True)

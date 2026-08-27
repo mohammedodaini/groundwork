@@ -119,9 +119,7 @@ def assert_url_is_safe(url: str, *, resolver=resolve_addresses) -> None:
         except ValueError:
             raise UnsafeURLError(f"Unparseable address {addr!r}") from None
         if _is_disallowed_ip(ip):
-            raise UnsafeURLError(
-                f"Host {hostname!r} resolves to disallowed address {addr}"
-            )
+            raise UnsafeURLError(f"Host {hostname!r} resolves to disallowed address {addr}")
 
 
 def is_url_safe(url: str, *, resolver=resolve_addresses) -> bool:
