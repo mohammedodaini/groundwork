@@ -218,9 +218,7 @@ async def insight_node(state: ResearchState, *, llm: LLMProvider) -> dict:
     if len(entities) < 1:
         return {"insights": []}
 
-    rendered = "\n\n".join(
-        f"ENTITY: {e.name}\n{_render_claims(e)}" for e in entities[:10]
-    )
+    rendered = "\n\n".join(f"ENTITY: {e.name}\n{_render_claims(e)}" for e in entities[:10])
     user = (
         f"OBJECTIVE:\n{state['request'].objective}\n\n"
         f"VERIFIED CLAIMS ACROSS ENTITIES:\n{rendered}\n\n"

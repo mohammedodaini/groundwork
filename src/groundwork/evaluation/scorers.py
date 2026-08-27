@@ -115,9 +115,7 @@ def score_result(
         # A "forbidden claim" is a known-false statement the dataset author has
         # seen models produce. Catching these is a hallucination canary.
         blob = " ".join(c.text.lower() for c in claims)
-        score.forbidden_claims_present = sum(
-            1 for f in forbidden_substrings if f.lower() in blob
-        )
+        score.forbidden_claims_present = sum(1 for f in forbidden_substrings if f.lower() in blob)
 
     return score
 
@@ -139,7 +137,10 @@ class BenchmarkSummary:
         rows = [
             ("Tasks run", f"{self.n_tasks}"),
             ("Tasks completed without error", f"{self.n_ok}/{self.n_tasks}"),
-            ("Mean evidence coverage (FACTs with verified quote)", f"{self.mean_evidence_coverage:.2%}"),
+            (
+                "Mean evidence coverage (FACTs with verified quote)",
+                f"{self.mean_evidence_coverage:.2%}",
+            ),
             ("Mean unsupported-claim rate (critic)", f"{self.mean_unsupported_rate:.2%}"),
             ("Mean quote verification rate", f"{self.mean_quote_verification_rate:.2%}"),
             ("Mean expected-entity recall", f"{self.mean_entity_recall:.2%}"),

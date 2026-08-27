@@ -32,9 +32,7 @@ class Settings(BaseSettings):
     # -- providers ---------------------------------------------------------
     # "fake" needs no credentials and is what the test-suite and the offline
     # demo use. This is why the repo is runnable by a recruiter in 60 seconds.
-    llm_provider: Literal[
-        "anthropic", "openai", "openrouter", "groq", "ollama", "fake"
-    ] = "fake"
+    llm_provider: Literal["anthropic", "openai", "openrouter", "groq", "ollama", "fake"] = "fake"
     search_provider: Literal["tavily", "brave", "searxng", "fake"] = "fake"
 
     anthropic_api_key: SecretStr | None = None

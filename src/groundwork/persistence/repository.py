@@ -12,6 +12,7 @@ import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from datetime import UTC
+from typing import Any
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import (
@@ -20,6 +21,7 @@ from sqlalchemy.ext.asyncio import (
     create_async_engine,
 )
 from sqlalchemy.orm import selectinload
+from sqlalchemy.pool import StaticPool
 
 from groundwork.domain.enums import JobStatus
 from groundwork.domain.schemas import ResearchRequest, ResearchResult
@@ -39,7 +41,17 @@ class Database:
     """Owns the engine and session factory."""
 
     def __init__(self, url: str, *, echo: bool = False) -> None:
-        self._engine = create_async_engine(url, echo=echo, future=True)
+        kwargs: dict[str, Any] = {"echo": echo, "future": True}
+        if url.startswith("sqlite") and (":memory:" in url or "mode=memory" in url):
+            # An in-memory SQLite database lives *inside* a single connection.
+            # With the default pool every new connection gets its own empty
+            # database, so a row written through one is invisible to the next
+            # and a recycled connection raises "Cannot operate on a closed
+            # database". StaticPool holds one connection for the engine's
+            # lifetime, which is the only way :memory: behaves like a real DB.
+            kwargs["poolclass"] = StaticPool
+            kwargs["connect_args"] = {"check_same_thread": False}
+        self._engine = create_async_engine(url, **kwargs)
         self._sessionmaker = async_sessionmaker(
             self._engine, expire_on_commit=False, class_=AsyncSession
         )
@@ -197,9 +209,7 @@ class ResearchRepository:
                         )
                     )
 
-    async def decide(
-        self, job_id: str, *, approved: bool, reviewer: str, note: str = ""
-    ) -> bool:
+    async def decide(self, job_id: str, *, approved: bool, reviewer: str, note: str = "") -> bool:
         """Record a human approval decision. Returns False if not pending."""
         from datetime import datetime
 
@@ -207,9 +217,7 @@ class ResearchRepository:
             row = await s.get(JobRow, job_id)
             if row is None or row.status != JobStatus.AWAITING_APPROVAL.value:
                 return False
-            row.status = (
-                JobStatus.APPROVED.value if approved else JobStatus.REJECTED.value
-            )
+            row.status = JobStatus.APPROVED.value if approved else JobStatus.REJECTED.value
             row.approved_by = reviewer[:200]
             row.approval_note = note[:4000]
             row.decided_at = datetime.now(UTC)
@@ -221,9 +229,7 @@ class ResearchRepository:
 
     async def list_jobs(self, *, limit: int = 50) -> list[JobRow]:
         async with self.db.session() as s:
-            res = await s.execute(
-                select(JobRow).order_by(JobRow.created_at.desc()).limit(limit)
-            )
+            res = await s.execute(select(JobRow).order_by(JobRow.created_at.desc()).limit(limit))
             return list(res.scalars().all())
 
     async def unsupported_claims(self, *, limit: int = 100) -> list[ClaimRow]:

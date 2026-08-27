@@ -93,9 +93,7 @@ def build_graph(
     graph = StateGraph(ResearchState)
 
     graph.add_node("plan", traced("plan", partial(plan_node, llm=llm)))
-    graph.add_node(
-        "gather", traced("gather", partial(gather_node, search=search, fetcher=fetcher))
-    )
+    graph.add_node("gather", traced("gather", partial(gather_node, search=search, fetcher=fetcher)))
     graph.add_node("extract", traced("extract", partial(extract_node, llm=llm)))
     graph.add_node("critic", traced("critic", partial(critic_node, llm=llm)))
     graph.add_node(
@@ -161,9 +159,7 @@ class ResearchEngine:
 
         # `recursion_limit` is a second, framework-level guard against runaway
         # loops, independent of our own `max_search_rounds`.
-        final: ResearchState = await self.graph.ainvoke(
-            state, config={"recursion_limit": 50}
-        )
+        final: ResearchState = await self.graph.ainvoke(state, config={"recursion_limit": 50})
 
         elapsed_ms = int((time.perf_counter() - started) * 1000)
         metrics = RunMetrics(

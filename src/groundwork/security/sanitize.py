@@ -101,9 +101,7 @@ def neutralise(text: str, *, max_chars: int = 20_000) -> str:
     # Defang fake role markers and chat-template tokens by inserting a zero-risk
     # separator. The words survive (so quotes still match) but stop looking like
     # structural markup to the model.
-    text = re.sub(
-        r"<\|(im_start|im_end|endoftext)\|>", r"<| \1 |>", text, flags=re.IGNORECASE
-    )
+    text = re.sub(r"<\|(im_start|im_end|endoftext)\|>", r"<| \1 |>", text, flags=re.IGNORECASE)
     text = re.sub(r"\[(/?INST)\]", r"[ \1 ]", text, flags=re.IGNORECASE)
     text = re.sub(r"<<(/?SYS)>>", r"<< \1 >>", text, flags=re.IGNORECASE)
     text = re.sub(
@@ -131,8 +129,8 @@ def wrap_untrusted(text: str, *, label: str = "WEB_CONTENT") -> str:
     from inside the page.
     """
     nonce = secrets.token_hex(8)
-    open_tag = f"<{label} id=\"{nonce}\">"
-    close_tag = f"</{label} id=\"{nonce}\">"
+    open_tag = f'<{label} id="{nonce}">'
+    close_tag = f'</{label} id="{nonce}">'
     # Belt and braces: if the text somehow contains our nonce, regenerate.
     if nonce in text:
         return wrap_untrusted(text, label=label)

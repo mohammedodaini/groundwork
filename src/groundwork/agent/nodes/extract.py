@@ -112,9 +112,7 @@ async def extract_from_source(
     user = extraction_user_prompt(objective, str(source.url), wrapped)
 
     try:
-        out = await llm.structured(
-            system=EXTRACTOR_SYSTEM, user=user, schema=ExtractionOutput
-        )
+        out = await llm.structured(system=EXTRACTOR_SYSTEM, user=user, schema=ExtractionOutput)
     except LLMError as exc:
         logger.warning("extraction_failed", extra={"url": str(source.url), "error": str(exc)})
         return "", [], [], [f"Extraction failed for {source.domain}: {exc}"]
@@ -123,9 +121,7 @@ async def extract_from_source(
         return out.entity_name, [], [], warnings
 
     if out.injection_attempt_noted:
-        warnings.append(
-            f"Model reported an instruction-like passage on {source.domain}."
-        )
+        warnings.append(f"Model reported an instruction-like passage on {source.domain}.")
 
     claims: list[Claim] = []
     evidence: list[Evidence] = []
@@ -147,10 +143,7 @@ async def extract_from_source(
             else:
                 # This is the money line: a fabricated quote is caught here,
                 # deterministically, and never reaches the user as a FACT.
-                warnings.append(
-                    f"Discarded unverifiable quote on {source.domain}: "
-                    f"{quote[:80]!r}"
-                )
+                warnings.append(f"Discarded unverifiable quote on {source.domain}: {quote[:80]!r}")
 
         status = raw.status
         note = ""
@@ -195,9 +188,7 @@ async def extract_node(state: ResearchState, *, llm: LLMProvider) -> dict:
     # deriving this set caused repeated re-extraction and duplicate claims.
     processed = set(state.get("processed_source_ids", []))
     pending = [
-        s
-        for s in state.get("sources", [])
-        if str(s.id) in texts and str(s.id) not in processed
+        s for s in state.get("sources", []) if str(s.id) in texts and str(s.id) not in processed
     ]
 
     if not pending:

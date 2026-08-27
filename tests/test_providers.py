@@ -119,8 +119,11 @@ def test_free_tier_pricing_reports_zero_cost() -> None:
 # surface is exactly two methods - which is what these tests cover.
 # --------------------------------------------------------------------------
 
+
 def test_search_provider_selection() -> None:
-    assert isinstance(build_search(_settings(search_provider="brave", brave_api_key="b")), BraveSearch)
+    assert isinstance(
+        build_search(_settings(search_provider="brave", brave_api_key="b")), BraveSearch
+    )
     assert isinstance(build_search(_settings(search_provider="searxng")), SearxngSearch)
     assert isinstance(
         build_search(_settings(search_provider="tavily", tavily_api_key="t")), TavilySearch

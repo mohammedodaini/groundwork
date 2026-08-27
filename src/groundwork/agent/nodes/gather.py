@@ -30,7 +30,9 @@ async def gather_node(
     fetcher: ContentFetcher,
 ) -> dict:
     """Execute every query not yet executed, fetch the results."""
-    pending = [q for q in state.get("queries", []) if q not in set(state.get("executed_queries", []))]
+    pending = [
+        q for q in state.get("queries", []) if q not in set(state.get("executed_queries", []))
+    ]
     if not pending:
         return {"warnings": ["Gather called with no pending queries."]}
 

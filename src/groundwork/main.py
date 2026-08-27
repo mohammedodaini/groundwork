@@ -42,6 +42,10 @@ STATIC_DIR = "static"
 # --------------------------------------------------------------------------
 
 
+# How long shutdown waits for running jobs before cancelling them.
+SHUTDOWN_GRACE_SECONDS = 10.0
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     settings = get_settings()
@@ -58,6 +62,18 @@ async def lifespan(app: FastAPI):
     try:
         yield
     finally:
+        # Wait for in-flight research jobs before tearing the engine down.
+        # `create_task` is fire-and-forget, so without this the pool is
+        # disposed underneath a running job and it fails on a closed
+        # connection instead of recording its result.
+        tasks = {t for t in getattr(app.state, "tasks", set()) if not t.done()}
+        if tasks:
+            logger.info("shutdown_waiting_for_jobs", extra={"count": len(tasks)})
+            _, pending = await asyncio.wait(tasks, timeout=SHUTDOWN_GRACE_SECONDS)
+            for task in pending:
+                task.cancel()
+            if pending:
+                await asyncio.gather(*pending, return_exceptions=True)
         await db.dispose()
 
 

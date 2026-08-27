@@ -114,9 +114,7 @@ def test_confidence_out_of_range_rejected() -> None:
 def test_extra_fields_are_forbidden() -> None:
     """LLMs invent keys; we want that loud, not silent."""
     with pytest.raises(ValidationError):
-        Claim.model_validate(
-            {"text": "hello there", "status": "FACT", "hallucinated_field": 1}
-        )
+        Claim.model_validate({"text": "hello there", "status": "FACT", "hallucinated_field": 1})
 
 
 # --------------------------------------------------------------------------
@@ -179,12 +177,22 @@ def test_unsupported_rate_counts_all_bad_verdicts() -> None:
             Entity(
                 name="Acme",
                 claims=[
-                    Claim(text="ok claim", status=EpistemicStatus.FACT, evidence_ids=[ev.id],
-                          verdict=VerificationVerdict.SUPPORTED),
-                    Claim(text="bad claim", status=EpistemicStatus.INFERENCE,
-                          verdict=VerificationVerdict.UNSUPPORTED),
-                    Claim(text="loud claim", status=EpistemicStatus.INFERENCE,
-                          verdict=VerificationVerdict.OVERSTATED),
+                    Claim(
+                        text="ok claim",
+                        status=EpistemicStatus.FACT,
+                        evidence_ids=[ev.id],
+                        verdict=VerificationVerdict.SUPPORTED,
+                    ),
+                    Claim(
+                        text="bad claim",
+                        status=EpistemicStatus.INFERENCE,
+                        verdict=VerificationVerdict.UNSUPPORTED,
+                    ),
+                    Claim(
+                        text="loud claim",
+                        status=EpistemicStatus.INFERENCE,
+                        verdict=VerificationVerdict.OVERSTATED,
+                    ),
                 ],
             )
         ],
