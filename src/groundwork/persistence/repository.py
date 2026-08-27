@@ -12,6 +12,7 @@ import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from datetime import UTC
+from typing import Any
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import (
@@ -20,6 +21,7 @@ from sqlalchemy.ext.asyncio import (
     create_async_engine,
 )
 from sqlalchemy.orm import selectinload
+from sqlalchemy.pool import StaticPool
 
 from groundwork.domain.enums import JobStatus
 from groundwork.domain.schemas import ResearchRequest, ResearchResult
@@ -39,7 +41,17 @@ class Database:
     """Owns the engine and session factory."""
 
     def __init__(self, url: str, *, echo: bool = False) -> None:
-        self._engine = create_async_engine(url, echo=echo, future=True)
+        kwargs: dict[str, Any] = {"echo": echo, "future": True}
+        if url.startswith("sqlite") and (":memory:" in url or "mode=memory" in url):
+            # An in-memory SQLite database lives *inside* a single connection.
+            # With the default pool every new connection gets its own empty
+            # database, so a row written through one is invisible to the next
+            # and a recycled connection raises "Cannot operate on a closed
+            # database". StaticPool holds one connection for the engine's
+            # lifetime, which is the only way :memory: behaves like a real DB.
+            kwargs["poolclass"] = StaticPool
+            kwargs["connect_args"] = {"check_same_thread": False}
+        self._engine = create_async_engine(url, **kwargs)
         self._sessionmaker = async_sessionmaker(
             self._engine, expire_on_commit=False, class_=AsyncSession
         )
