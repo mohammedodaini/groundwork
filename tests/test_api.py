@@ -7,6 +7,8 @@ decision is rejected rather than silently overwriting the first reviewer.
 
 from __future__ import annotations
 
+import time
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -296,3 +298,33 @@ def test_production_without_api_key_refuses_to_start(monkeypatch):
 
     # Local and test environments keep the frictionless default.
     assert Settings(_env_file=None, environment="local").api_key is None
+
+
+def _wait_for_job(client, job_id: str, timeout: float = 10.0) -> dict:
+    """Poll until the job leaves PENDING/RUNNING. Jobs run as background tasks."""
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        body = client.get(f"/api/research/{job_id}").json()
+        if body["status"] not in ("PENDING", "RUNNING"):
+            return body
+        time.sleep(0.02)
+    raise AssertionError(f"job {job_id} still running after {timeout}s")
+
+
+def test_offline_mode_replays_the_demo_instead_of_an_empty_report(client):
+    """`make run` on a fresh clone must show a real-looking run.
+
+    The API used to build a FakeLLM with no script: the planner failed, nothing
+    was searched, and the UI showed an empty report waiting for approval.
+    """
+    res = client.post(
+        "/api/research",
+        json={"objective": "Find technical wholesalers in Gelderland processing orders manually."},
+    )
+    body = _wait_for_job(client, res.json()["job_id"])
+
+    result = body["result"]
+    claims = [c for entity in result["entities"] for c in entity["claims"]]
+    assert result["entities"], "the demo scenario finds entities"
+    assert any(c["status"] == "FACT" for c in claims)
+    assert result["warnings"][0].startswith("Offline demo mode")

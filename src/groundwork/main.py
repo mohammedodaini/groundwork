@@ -25,6 +25,7 @@ from pydantic import BaseModel, Field
 
 from groundwork.agent.graph import ResearchEngine
 from groundwork.config import DEV_CORS_ORIGINS, Settings, get_settings
+from groundwork.demo import DEMO_WARNING, build_demo_providers, is_demo_mode
 from groundwork.domain.enums import JobStatus
 from groundwork.domain.schemas import ResearchRequest
 from groundwork.logging_conf import configure_logging
@@ -94,7 +95,16 @@ def get_app_settings(request: Request) -> Settings:
 
 
 def build_engine(settings: Settings) -> ResearchEngine:
-    """Fresh providers per run so token counters are per-run, not global."""
+    """Fresh providers per run so token counters are per-run, not global.
+
+    With both providers set to `fake` there is nothing real to research with, so
+    the run replays the scripted demo scenario instead of returning an empty
+    report: the same graph, verification and critic, with fixture answers in
+    place of a model. `make run` on a fresh clone shows a real-looking result.
+    """
+    if is_demo_mode(settings):
+        llm, search, fetcher = build_demo_providers(settings)
+        return ResearchEngine(settings=settings, llm=llm, search=search, fetcher=fetcher)
     return ResearchEngine(
         settings=settings,
         llm=build_llm(settings),
@@ -245,6 +255,8 @@ def create_app() -> FastAPI:
             try:
                 engine = build_engine(settings)
                 result = await engine.run(request)
+                if is_demo_mode(settings):
+                    result.warnings.insert(0, DEMO_WARNING)
                 await repo.save_result(job_id, result)
                 raw.app.state.traces[job_id] = engine.tracer.summary()
             except Exception as exc:
