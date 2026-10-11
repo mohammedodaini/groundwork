@@ -72,6 +72,7 @@ What the code enforces or depends on:
 - **`POSTGRES_PASSWORD`** for compose. The database port is never published.
 - **`CORS_ORIGINS`** set to your UI's origin, unless the bundled UI is served by the API itself.
 - **`FORWARDED_ALLOW_IPS`** set to your reverse proxy's address, or rate limiting sees every client as the proxy.
+- **Rolling back** means deploying the previous commit. Schema changes so far only add tables, which older code ignores, so a rollback never needs a database migration. A change to an existing table would need Alembic first (see Limitations).
 - **One API process per database.** Runs are in-process tasks, and startup marks any unfinished run as interrupted, which is only safe when no other process is running it.
 
 `make smoke URL=https://your-host API_KEY=...` runs one job end to end against the deployment.
@@ -242,7 +243,7 @@ There is deliberately **no single "factual accuracy" score.** It would be the mo
 
 ## Testing
 
-**132 tests, 88% coverage, all offline.** No API keys, no network, no runtime downloads. Every push runs `make lint typecheck test` plus an offline evaluation smoke test on Python 3.11 and 3.12 ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)). A separate CI job runs the Docker image on its own defaults and the compose stack on Postgres in production mode, each through the real HTTP API.
+**132 tests, 88% coverage, all offline.** No API keys, no network, no runtime downloads. Every push runs `make lint typecheck test` plus an offline evaluation smoke test on Python 3.11 and 3.12 ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)). A separate CI job runs the Docker image on its own defaults and the compose stack on Postgres in production mode, each through the real HTTP API. CI also audits the locked dependencies for known vulnerabilities, weekly as well as on every push.
 
 ```
 tests/test_security.py         33  injection detection, nonce isolation, SSRF policy, redirects

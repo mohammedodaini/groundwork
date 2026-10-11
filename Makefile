@@ -1,4 +1,4 @@
-.PHONY: help install run test lint typecheck eval eval-fake docker clean lock lock-check smoke
+.PHONY: help install run test lint typecheck eval eval-fake docker clean lock lock-check smoke audit
 
 # Prefer the project venv over whatever `python` happens to be on PATH.
 # Without this, a system/conda interpreter runs instead and every target
@@ -14,6 +14,9 @@ install:  ## Install the package with dev extras, pinned by requirements-dev.loc
 lock:  ## Re-resolve the lockfiles after changing dependencies in pyproject.toml
 	uv pip compile pyproject.toml --universal --python-version 3.11 --extra anthropic --extra openai --extra postgres -o requirements.lock
 	uv pip compile pyproject.toml --universal --python-version 3.11 --extra dev -o requirements-dev.lock
+
+audit:  ## Check the locked dependencies against known vulnerabilities (same check as CI)
+	uvx pip-audit==2.10.1 -r requirements.lock -r requirements-dev.lock --disable-pip --no-deps --progress-spinner off
 
 lock-check:  ## Fail if the lockfiles are stale (existing pins are kept; only pyproject changes move them)
 	$(MAKE) lock
