@@ -32,6 +32,7 @@ from groundwork.security.ssrf import (
     UnsafeURLError,
     assert_url_is_safe,
 )
+from groundwork.security.transport import PinnedTransport
 
 logger = logging.getLogger(__name__)
 
@@ -332,6 +333,26 @@ class FetchResult(BaseModel):
     text: str
 
 
+async def _read_text_capped(res: httpx.Response, limit: int) -> str:
+    """Decode at most `limit` bytes of a streamed body, then stop reading.
+
+    `res.text` would have read and decompressed the entire body before any
+    slicing happened, so the 5 MB cap bounded the text kept, not the memory
+    spent: one multi-gigabyte page or a small compressed bomb in a search result
+    could exhaust the process. Peak memory is now the cap plus one decoded chunk.
+    """
+    chunks: list[bytes] = []
+    size = 0
+    async for chunk in res.aiter_bytes():
+        room = limit - size
+        if len(chunk) >= room:
+            chunks.append(chunk[:room])
+            break
+        chunks.append(chunk)
+        size += len(chunk)
+    return b"".join(chunks).decode(res.encoding or "utf-8", errors="replace")
+
+
 class ContentFetcher:
     """Fetches URLs safely and returns sanitized text.
 
@@ -362,15 +383,20 @@ class ContentFetcher:
         the client default, so an injected client (tests, callers) cannot
         silently re-enable httpx's own redirect handling and reopen the hole.
 
-        Returns the final response and the URL that actually served it.
+        Returns the final response, still unread, and the URL that actually
+        served it. The body is streamed so the caller can stop at a size cap;
+        the caller must close the response.
         """
         current = url
         for _ in range(MAX_REDIRECTS + 1):
             assert_url_is_safe(current)
-            res = await client.get(current, follow_redirects=False)
+            res = await client.send(
+                client.build_request("GET", current), stream=True, follow_redirects=False
+            )
             if not res.is_redirect:
                 return res, current
             location = res.headers.get("location")
+            await res.aclose()
             if not location:
                 raise UnsafeURLError(f"Redirect from {current!r} had no Location header")
             # Relative redirects are legal and common. Resolve against the
@@ -399,18 +425,26 @@ class ContentFetcher:
             # We drive the redirect chain ourselves. See the helper below.
             follow_redirects=False,
             headers={"User-Agent": self.settings.user_agent},
+            # Connect only to the address the SSRF policy approved, so a second,
+            # different DNS answer cannot move the connection. See transport.py.
+            transport=PinnedTransport(),
+            # Environment proxies would route requests around the pinned transport.
+            trust_env=False,
         )
         owns_client = self._client is None
         try:
             res, final_url = await self._get_validating_redirects(client, url)
-            res.raise_for_status()
+            try:
+                res.raise_for_status()
 
-            ctype = res.headers.get("content-type", "")
-            if "html" not in ctype and "text" not in ctype and ctype:
-                logger.info("skipped_non_text", extra={"url": url, "ctype": ctype})
-                return None
+                ctype = res.headers.get("content-type", "")
+                if "html" not in ctype and "text" not in ctype and ctype:
+                    logger.info("skipped_non_text", extra={"url": url, "ctype": ctype})
+                    return None
 
-            raw = res.text[:MAX_RESPONSE_BYTES]
+                raw = await _read_text_capped(res, MAX_RESPONSE_BYTES)
+            finally:
+                await res.aclose()
         except UnsafeURLError as exc:
             # A redirect walked somewhere it should not. Same log event as a bad
             # initial URL, because operationally it is the same thing.

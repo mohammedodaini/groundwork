@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import ipaddress
 import socket
+from collections.abc import Callable
 from urllib.parse import urlparse
 
 ALLOWED_SCHEMES = frozenset({"http", "https"})
@@ -44,10 +45,16 @@ class UnsafeURLError(ValueError):
 
 
 def _is_disallowed_ip(ip: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
-    """Reject anything that is not a normal public unicast address."""
+    """Reject anything that is not a normal, globally routable unicast address.
+
+    `is_global` catches what the named checks miss, notably the shared address
+    space 100.64.0.0/10 that carrier-grade NAT and Tailscale use, and other
+    special-purpose ranges that are never a public web page. The named checks
+    stay because `is_global` on its own lets multicast through.
+    """
     if ip in BLOCKED_ADDRESSES:
         return True
-    return any(
+    return not ip.is_global or any(
         (
             ip.is_private,
             ip.is_loopback,
@@ -72,38 +79,25 @@ def resolve_addresses(hostname: str) -> list[str]:
     return sorted({str(info[4][0]) for info in infos})
 
 
-def assert_url_is_safe(url: str, *, resolver=resolve_addresses) -> None:
-    """Raise `UnsafeURLError` unless `url` is safe to fetch.
+Resolver = Callable[[str], list[str]]
 
-    `resolver` is injected so the test-suite can simulate DNS rebinding.
-    """
-    parsed = urlparse(url)
 
-    if parsed.scheme.lower() not in ALLOWED_SCHEMES:
-        raise UnsafeURLError(f"Scheme not allowed: {parsed.scheme!r}")
-
-    hostname = (parsed.hostname or "").lower()
-    if not hostname:
-        raise UnsafeURLError("URL has no hostname")
-
+def _check_hostname(hostname: str) -> None:
     if hostname in BLOCKED_HOSTNAMES or hostname.endswith(".localhost"):
         raise UnsafeURLError(f"Hostname not allowed: {hostname!r}")
 
-    # Reject credentials in the URL (http://user:pass@host) - usually an attempt
-    # to confuse naive host parsing.
-    if parsed.username or parsed.password:
-        raise UnsafeURLError("Credentials in URL are not allowed")
 
+def _validated_addresses(hostname: str, *, resolver: Resolver) -> list[str]:
+    """Every address `hostname` stands for, or `UnsafeURLError` if any is disallowed."""
     # A literal IP in the URL still has to pass the address policy.
     try:
         literal = ipaddress.ip_address(hostname)
     except ValueError:
         literal = None
-
     if literal is not None:
         if _is_disallowed_ip(literal):
             raise UnsafeURLError(f"IP address not allowed: {hostname}")
-        return
+        return [hostname]
 
     try:
         addresses = resolver(hostname)
@@ -120,9 +114,49 @@ def assert_url_is_safe(url: str, *, resolver=resolve_addresses) -> None:
             raise UnsafeURLError(f"Unparseable address {addr!r}") from None
         if _is_disallowed_ip(ip):
             raise UnsafeURLError(f"Host {hostname!r} resolves to disallowed address {addr}")
+    return addresses
 
 
-def is_url_safe(url: str, *, resolver=resolve_addresses) -> bool:
+def assert_url_is_safe(url: str, *, resolver: Resolver = resolve_addresses) -> None:
+    """Raise `UnsafeURLError` unless `url` is safe to fetch.
+
+    This is the early check: it rejects bad URLs before any connection exists.
+    On its own it cannot stop DNS rebinding, because the HTTP client would
+    resolve the name again when it connects; `resolve_safe_address` is the
+    connect-time half that closes that gap.
+    """
+    parsed = urlparse(url)
+
+    if parsed.scheme.lower() not in ALLOWED_SCHEMES:
+        raise UnsafeURLError(f"Scheme not allowed: {parsed.scheme!r}")
+
+    hostname = (parsed.hostname or "").lower()
+    if not hostname:
+        raise UnsafeURLError("URL has no hostname")
+
+    _check_hostname(hostname)
+
+    # Reject credentials in the URL (http://user:pass@host) - usually an attempt
+    # to confuse naive host parsing.
+    if parsed.username or parsed.password:
+        raise UnsafeURLError("Credentials in URL are not allowed")
+
+    _validated_addresses(hostname, resolver=resolver)
+
+
+def resolve_safe_address(hostname: str, *, resolver: Resolver = resolve_addresses) -> str:
+    """Resolve `hostname`, validate every address, and return the one to connect to.
+
+    Called at connect time by the pinned transport, so the address that was
+    checked is the address that is used. A DNS server answering differently on
+    a second lookup (DNS rebinding) has no second lookup to answer.
+    """
+    hostname = hostname.lower()
+    _check_hostname(hostname)
+    return _validated_addresses(hostname, resolver=resolver)[0]
+
+
+def is_url_safe(url: str, *, resolver: Resolver = resolve_addresses) -> bool:
     """Boolean convenience wrapper."""
     try:
         assert_url_is_safe(url, resolver=resolver)

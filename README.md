@@ -175,9 +175,11 @@ The system fetches attacker-controllable pages and puts their text into an LLM p
 An agent fetching model-suggested URLs is an SSRF primitive; on cloud hosts `169.254.169.254` serves IAM credentials.
 
 - Scheme allowlist (`http`/`https` only)
-- Blocks loopback, private, link-local, multicast, reserved ranges, and cloud metadata IPs
-- **DNS rebinding defence:** the hostname is resolved and *every* returned address is checked: a hostname-only blocklist misses `evil.com → 127.0.0.1`
-- Credentials-in-URL rejected; redirects capped at 3; responses capped at 5 MB
+- Only globally routable unicast addresses are fetched: loopback, private, link-local, multicast, reserved, shared (`100.64.0.0/10`, used by carrier-grade NAT and Tailscale) and cloud metadata addresses are refused
+- **Every** address a hostname resolves to is checked, so `evil.com → 127.0.0.1` fails even though the name looks harmless
+- **DNS rebinding defence:** the connection goes to the exact address the policy approved. The check and the connection share one DNS lookup, so a server that answers differently the second time has no second time to answer. TLS still verifies the original hostname
+- The policy re-runs on every redirect hop (capped at 3); credentials in URLs are rejected; environment proxies are ignored so they cannot route around the pinned connection
+- Bodies are streamed and reading stops at 5 MB, so a huge page or a compressed bomb cannot exhaust memory
 
 ### Other controls
 
