@@ -39,7 +39,7 @@ Default providers are **offline fakes**. No API key, no cost, no network.
 ```bash
 git clone <your-fork-url> && cd groundwork
 python -m venv .venv && source .venv/bin/activate
-pip install -e ".[dev]"
+pip install -c requirements-dev.lock -e ".[dev]"   # pinned versions, same as CI
 cp .env.example .env
 
 make test          # full suite, no network, no keys

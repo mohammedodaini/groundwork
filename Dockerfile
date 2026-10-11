@@ -4,10 +4,12 @@
 FROM python:3.12-slim AS builder
 WORKDIR /build
 RUN pip install --no-cache-dir hatchling
-COPY pyproject.toml README.md ./
+COPY pyproject.toml README.md requirements.lock ./
 COPY src ./src
-RUN pip wheel --no-cache-dir --wheel-dir /wheels . \
- && pip wheel --no-cache-dir --wheel-dir /wheels asyncpg anthropic
+# Constrained by requirements.lock, so an image rebuilt from the same commit gets
+# the same dependency versions. The extras are what the image ships with:
+# Postgres support and the default LLM provider.
+RUN pip wheel --no-cache-dir --wheel-dir /wheels -c requirements.lock ".[anthropic,postgres]"
 
 FROM python:3.12-slim AS runtime
 
