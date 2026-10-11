@@ -55,3 +55,42 @@ jobs:
         # no keys, no cost. Guards the failure mode where the harness reports a
         # clean run while producing zero claims.
         run: make eval-fake
+
+  container:
+    # The unit tests run on SQLite inside the test process. This job runs what
+    # a deployer runs: the image on its own defaults, and the compose stack on
+    # Postgres in production mode, each driven through the real HTTP API.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Image starts on its own defaults and completes a run
+        run: |
+          docker build -t groundwork:ci .
+          docker run -d --name groundwork -p 8001:8000 groundwork:ci
+          curl -sf --retry 30 --retry-all-errors --retry-delay 1 -o /dev/null localhost:8001/health
+          python3 scripts/smoke_test.py http://localhost:8001
+
+      - name: Compose stack runs in production mode on Postgres
+        env:
+          POSTGRES_PASSWORD: ci-only-password
+          ENVIRONMENT: production
+          API_KEY: ci-only-api-key
+          CORS_ORIGINS: '["https://groundwork.example"]'
+        run: |
+          docker compose up -d --build
+          curl -sf --retry 30 --retry-all-errors --retry-delay 1 -o /dev/null localhost:8000/health
+          test "$(curl -s -o /dev/null -w '%{http_code}' localhost:8000/api/research)" = "401"
+          python3 scripts/smoke_test.py http://localhost:8000 --api-key ci-only-api-key
+
+      - name: Container logs
+        if: failure()
+        run: |
+          docker logs groundwork || true
+          docker compose logs --no-color || true
+
+      - name: Tear down
+        if: always()
+        run: |
+          docker rm -f groundwork || true
+          docker compose down -v || true

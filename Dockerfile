@@ -28,6 +28,14 @@ RUN pip install --no-cache-dir /wheels/*.whl && rm -rf /wheels
 COPY static ./static
 COPY src ./src
 
+# SQLite is the default database. /app belongs to root and the app runs as an
+# unprivileged user, so the relative default (./groundwork.db) could not be
+# created and the container exited at startup. Give the app one directory it
+# owns. Mount a volume there to keep data across containers; compose sets
+# DATABASE_URL to Postgres, which overrides this.
+RUN mkdir -p /app/data && chown groundwork:groundwork /app/data
+ENV DATABASE_URL=sqlite+aiosqlite:////app/data/groundwork.db
+
 USER groundwork
 EXPOSE 8000
 

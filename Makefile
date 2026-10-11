@@ -1,4 +1,4 @@
-.PHONY: help install run test lint typecheck eval eval-fake docker clean lock lock-check
+.PHONY: help install run test lint typecheck eval eval-fake docker clean lock lock-check smoke
 
 # Prefer the project venv over whatever `python` happens to be on PATH.
 # Without this, a system/conda interpreter runs instead and every target
@@ -45,3 +45,6 @@ docker:  ## Build and run with Postgres
 
 clean:
 	rm -rf .pytest_cache .ruff_cache .mypy_cache **/__pycache__ groundwork.db
+
+smoke:  ## End-to-end check against a running instance: make smoke URL=http://localhost:8000
+	$(PY) scripts/smoke_test.py $(or $(URL),http://localhost:8000) $(if $(API_KEY),--api-key $(API_KEY))
