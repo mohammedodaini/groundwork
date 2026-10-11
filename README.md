@@ -175,7 +175,7 @@ An agent fetching model-suggested URLs is an SSRF primitive; on cloud hosts `169
 
 ### Other controls
 
-Optional `X-API-Key` with **constant-time comparison** (a naive `!=` leaks key material via timing) · per-IP sliding-window rate limit on the paid endpoint · secret-redaction filter on all log output · `extra="forbid"` on every schema · non-root Docker user.
+Optional `X-API-Key` with **constant-time comparison** (a naive `!=` leaks key material via timing), enforced on **every** `/api/` endpoint including the reads: gating only the endpoint that spends money would leave every objective and every result public, and the research payload is the sensitive data here. Setting `ENVIRONMENT=production` without an `API_KEY` **refuses to start** rather than booting an open, paid endpoint. Plus: per-IP sliding-window rate limit on the paid endpoint · secret-redaction filter on all log output · `extra="forbid"` on every schema · non-root Docker user.
 
 ---
 
@@ -222,13 +222,13 @@ There is deliberately **no single "factual accuracy" score.** It would be the mo
 
 ## Testing
 
-**104 tests, 87% coverage, all offline.** No API keys, no network, no runtime downloads.
+**112 tests, 87% coverage, all offline.** No API keys, no network, no runtime downloads. Every push runs `make lint typecheck test` plus an offline evaluation smoke test on Python 3.11 and 3.12 ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)).
 
 ```
 tests/test_security.py    28  injection detection, nonce isolation, SSRF, DNS rebinding
 tests/test_grounding.py   19  verbatim verification, epistemic downgrade, referential integrity
 tests/test_workflow.py    26  end-to-end, agentic loop, dedup, provider failures, schema repair
-tests/test_api.py         15  HITL gating, auth, persistence, validation
+tests/test_api.py         18  HITL gating, auth, persistence, validation
 tests/test_evaluation.py  15  scorers, dataset integrity, honest-reporting guarantees
 ```
 

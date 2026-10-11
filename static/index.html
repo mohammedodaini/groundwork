@@ -181,7 +181,7 @@ function poll() {
   clearInterval(pollTimer);
   pollTimer = setInterval(async () => {
     if (!currentJob) return;
-    const res = await fetch(`/api/research/${currentJob}`);
+    const res = await fetch(`/api/research/${currentJob}`, { headers: headers() });
     if (!res.ok) return;
     const job = await res.json();
     setStatus(`Job ${currentJob} — status: ${job.status}`);
@@ -289,12 +289,12 @@ async function decide(approved) {
     body: JSON.stringify({ approved, reviewer, note: ($("note") && $("note").value) || "" })
   });
   if (!res.ok) { alert("Decision failed: " + await res.text()); return; }
-  const job = await (await fetch(`/api/research/${currentJob}`)).json();
+  const job = await (await fetch(`/api/research/${currentJob}`, { headers: headers() })).json();
   render(job); loadHistory();
 }
 
 async function loadHistory() {
-  const res = await fetch("/api/research?limit=25");
+  const res = await fetch("/api/research?limit=25", { headers: headers() });
   if (!res.ok) return;
   const jobs = await res.json();
   $("history").innerHTML = jobs.length ? `<table>
@@ -308,7 +308,7 @@ async function loadHistory() {
 
 async function open_(id) {
   currentJob = id;
-  const job = await (await fetch(`/api/research/${id}`)).json();
+  const job = await (await fetch(`/api/research/${id}`, { headers: headers() })).json();
   setStatus(`Job ${id} — status: ${job.status}`);
   render(job);
   window.scrollTo({ top: 0, behavior: "smooth" });

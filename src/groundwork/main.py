@@ -24,7 +24,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from groundwork.agent.graph import ResearchEngine
-from groundwork.config import Settings, get_settings
+from groundwork.config import DEV_CORS_ORIGINS, Settings, get_settings
 from groundwork.domain.enums import JobStatus
 from groundwork.domain.schemas import ResearchRequest
 from groundwork.logging_conf import configure_logging
@@ -59,6 +59,14 @@ async def lifespan(app: FastAPI):
         "startup",
         extra={"llm": settings.llm_provider, "search": settings.search_provider},
     )
+    # Not fatal: a deployment serving the bundled UI from this origin needs no
+    # cross-origin entry at all. Still worth saying out loud, because the other
+    # reason to see this value in production is that nobody set it.
+    if settings.environment == "production" and tuple(settings.cors_origins) == DEV_CORS_ORIGINS:
+        logger.warning(
+            "cors_origins_left_at_development_default",
+            extra={"cors_origins": list(settings.cors_origins)},
+        )
     try:
         yield
     finally:
@@ -251,7 +259,11 @@ def create_app() -> FastAPI:
 
         return JobCreated(job_id=job_id, status=JobStatus.PENDING.value)
 
-    @app.get("/api/research/{job_id}", tags=["research"])
+    @app.get(
+        "/api/research/{job_id}",
+        dependencies=[Depends(require_api_key)],
+        tags=["research"],
+    )
     async def get_research(
         job_id: str, repo: Annotated[ResearchRepository, Depends(get_repo)]
     ) -> JSONResponse:
@@ -271,7 +283,12 @@ def create_app() -> FastAPI:
             }
         )
 
-    @app.get("/api/research", response_model=list[JobSummary], tags=["research"])
+    @app.get(
+        "/api/research",
+        response_model=list[JobSummary],
+        dependencies=[Depends(require_api_key)],
+        tags=["research"],
+    )
     async def list_research(
         repo: Annotated[ResearchRepository, Depends(get_repo)], limit: int = 50
     ) -> list[JobSummary]:
@@ -301,7 +318,11 @@ def create_app() -> FastAPI:
             )
         return out
 
-    @app.get("/api/research/{job_id}/trace", tags=["observability"])
+    @app.get(
+        "/api/research/{job_id}/trace",
+        dependencies=[Depends(require_api_key)],
+        tags=["observability"],
+    )
     async def get_trace(job_id: str, raw: Request) -> dict:
         trace = raw.app.state.traces.get(job_id)
         if trace is None:

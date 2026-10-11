@@ -221,3 +221,78 @@ def test_health_is_not_authenticated(monkeypatch):
     with TestClient(create_app()) as c:
         assert c.get("/health").status_code == 200
     get_settings.cache_clear()
+
+
+def test_read_endpoints_are_authenticated_when_configured(monkeypatch):
+    """Reads are gated too, not just the endpoint that spends money.
+
+    Gating writes alone was a real hole: with API_KEY set, creating a job
+    required the key but reading it back did not, so every objective and every
+    result was public to anyone who could reach the port. The research payload
+    IS the sensitive data here.
+    """
+    monkeypatch.setenv("API_KEY", "secret-key")
+    monkeypatch.setenv("LLM_PROVIDER", "fake")
+    monkeypatch.setenv("SEARCH_PROVIDER", "fake")
+    monkeypatch.setenv("DATABASE_URL", "sqlite+aiosqlite:///:memory:")
+    from groundwork.config import get_settings
+
+    get_settings.cache_clear()
+    auth = {"X-API-Key": "secret-key"}
+    with TestClient(create_app()) as c:
+        job_id = c.post(
+            "/api/research",
+            json={"objective": "A perfectly valid research objective here."},
+            headers=auth,
+        ).json()["job_id"]
+
+        for path in (
+            "/api/research",
+            f"/api/research/{job_id}",
+            f"/api/research/{job_id}/trace",
+        ):
+            assert c.get(path).status_code == 401, f"{path} leaked without a key"
+            assert c.get(path, headers={"X-API-Key": "wrong"}).status_code == 401
+
+        # The correct key still gets through.
+        assert c.get("/api/research", headers=auth).status_code == 200
+        assert c.get(f"/api/research/{job_id}", headers=auth).status_code == 200
+    get_settings.cache_clear()
+
+
+def test_reads_stay_open_when_no_key_is_configured(monkeypatch):
+    """The frictionless local default must survive the change above."""
+    monkeypatch.delenv("API_KEY", raising=False)
+    monkeypatch.setenv("LLM_PROVIDER", "fake")
+    monkeypatch.setenv("DATABASE_URL", "sqlite+aiosqlite:///:memory:")
+    from groundwork.config import get_settings
+
+    get_settings.cache_clear()
+    with TestClient(create_app()) as c:
+        assert c.get("/api/research").status_code == 200
+    get_settings.cache_clear()
+
+
+def test_production_without_api_key_refuses_to_start(monkeypatch):
+    """A missing env var must not be the difference between private and public.
+
+    `api_key` defaults to None so `make run` works with no setup. Combined with
+    ENVIRONMENT=production that default is an open, paid endpoint, so the app
+    refuses to construct its settings at all rather than booting wide open.
+    """
+    from pydantic import ValidationError
+
+    from groundwork.config import Settings
+
+    monkeypatch.delenv("API_KEY", raising=False)
+    # `_env_file=None` keeps the test hermetic: it must not depend on whatever
+    # the developer happens to have in their local .env.
+    with pytest.raises(ValidationError, match="requires API_KEY"):
+        Settings(_env_file=None, environment="production")
+
+    ok = Settings(_env_file=None, environment="production", api_key="a-real-key")
+    assert ok.api_key is not None
+    assert ok.api_key.get_secret_value() == "a-real-key"
+
+    # Local and test environments keep the frictionless default.
+    assert Settings(_env_file=None, environment="local").api_key is None

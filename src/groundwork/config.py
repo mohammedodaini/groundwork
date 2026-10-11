@@ -11,8 +11,12 @@ from __future__ import annotations
 from functools import lru_cache
 from typing import Literal
 
-from pydantic import Field, SecretStr
+from pydantic import Field, SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+# The localhost origin that ships as the default. Named so the production
+# check below can tell "deliberately configured" from "never configured".
+DEV_CORS_ORIGINS = ("http://localhost:3000",)
 
 
 class Settings(BaseSettings):
@@ -81,10 +85,34 @@ class Settings(BaseSettings):
     # -- api ---------------------------------------------------------------
     api_key: SecretStr | None = Field(
         default=None,
-        description="If set, mutating endpoints require X-API-Key.",
+        description="If set, every /api endpoint requires X-API-Key. Required in production.",
     )
-    cors_origins: list[str] = Field(default_factory=lambda: ["http://localhost:3000"])
+    cors_origins: list[str] = Field(default_factory=lambda: list(DEV_CORS_ORIGINS))
     rate_limit_per_minute: int = 30
+
+    @model_validator(mode="after")
+    def _production_must_be_authenticated(self) -> Settings:
+        """Refuse to start an unauthenticated production deployment.
+
+        `api_key` defaults to None so local dev stays frictionless. That default
+        is fine on a laptop and indefensible in production: every endpoint,
+        including the one that spends money on LLM calls and the ones that
+        return past research, would be open to anyone who can reach the port.
+        A missing environment variable should not be the difference between a
+        private service and a public one, so we fail at startup instead.
+
+        CORS is only warned about, not enforced: a deployment that serves the
+        bundled UI from this same origin never needs a cross-origin entry, so
+        the default there is a smell rather than a hole. The warning is emitted
+        in `main.lifespan`, once logging is configured.
+        """
+        if self.environment == "production" and self.api_key is None:
+            raise ValueError(
+                "ENVIRONMENT=production requires API_KEY to be set; refusing to "
+                "start an unauthenticated deployment. Set API_KEY, or run with "
+                "ENVIRONMENT=local if this really is a local instance."
+            )
+        return self
 
     @property
     def uses_real_llm(self) -> bool:
