@@ -32,6 +32,7 @@ from groundwork.persistence.models import (
     EvidenceRow,
     JobRow,
     SourceRow,
+    TraceRow,
 )
 
 logger = logging.getLogger(__name__)
@@ -253,6 +254,16 @@ class ResearchRepository:
             row.approval_note = note[:4000]
             row.decided_at = datetime.now(UTC)
             return True
+
+    async def save_trace(self, job_id: str, trace: dict) -> None:
+        """Persist a run's per-node timing, so it outlives the process."""
+        async with self.db.session() as s:
+            await s.merge(TraceRow(job_id=job_id, trace=trace))
+
+    async def get_trace(self, job_id: str) -> dict | None:
+        async with self.db.session() as s:
+            row = await s.get(TraceRow, job_id)
+            return row.trace if row else None
 
     async def get_job(self, job_id: str) -> JobRow | None:
         async with self.db.session() as s:

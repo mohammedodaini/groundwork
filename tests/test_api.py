@@ -425,3 +425,23 @@ def test_shutdown_records_cancelled_runs_as_interrupted(tmp_path, monkeypatch):
     row = asyncio.run(read_back())  # read directly: no startup cleanup involved
     assert row.status == JobStatus.FAILED.value
     assert row.error.startswith("Interrupted")
+
+
+def test_trace_survives_a_restart(tmp_path, monkeypatch):
+    """Traces lived in a dict on app.state: never evicted, and gone after a restart."""
+    db_url = f"sqlite+aiosqlite:///{tmp_path}/trace.db"
+    _app_env(monkeypatch, db_url)
+    with TestClient(create_app()) as c:
+        job_id = c.post(
+            "/api/research",
+            json={"objective": "Find technical wholesalers in Gelderland processing orders."},
+        ).json()["job_id"]
+        _wait_for_job(c, job_id)
+        assert c.get(f"/api/research/{job_id}/trace").status_code == 200
+
+    _app_env(monkeypatch, db_url)
+    with TestClient(create_app()) as c:
+        trace = c.get(f"/api/research/{job_id}/trace")
+
+    assert trace.status_code == 200
+    assert trace.json(), "the trace should carry per-node timings"

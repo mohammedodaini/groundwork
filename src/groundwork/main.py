@@ -271,7 +271,7 @@ def create_app() -> FastAPI:
                 if is_demo_mode(settings):
                     result.warnings.insert(0, DEMO_WARNING)
                 await repo.save_result(job_id, result)
-                raw.app.state.traces[job_id] = engine.tracer.summary()
+                await repo.save_trace(job_id, engine.tracer.summary())
             except asyncio.CancelledError:
                 # Shutdown cancelled a run that outlived the grace period.
                 # Record that, rather than leave the row claiming to be RUNNING.
@@ -353,8 +353,10 @@ def create_app() -> FastAPI:
         dependencies=[Depends(require_api_key)],
         tags=["observability"],
     )
-    async def get_trace(job_id: str, raw: Request) -> dict:
-        trace = raw.app.state.traces.get(job_id)
+    async def get_trace(
+        job_id: str, repo: Annotated[ResearchRepository, Depends(get_repo)]
+    ) -> dict:
+        trace = await repo.get_trace(job_id)
         if trace is None:
             raise HTTPException(404, "No trace for this job")
         return trace
@@ -400,7 +402,6 @@ def create_app() -> FastAPI:
 
     # In-memory side tables. Not durable by design; traces are debugging aids.
     app.state.tasks = set()
-    app.state.traces = {}
     return app
 
 
