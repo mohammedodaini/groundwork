@@ -56,7 +56,13 @@ ANTHROPIC_API_KEY=sk-ant-...
 TAVILY_API_KEY=tvly-...
 ```
 
-With Postgres: `docker compose up --build`
+With Postgres, set a database password first. The compose file refuses to start
+without one, and never publishes the database port:
+
+```bash
+echo "POSTGRES_PASSWORD=$(openssl rand -hex 24)" >> .env
+docker compose up --build
+```
 
 ---
 

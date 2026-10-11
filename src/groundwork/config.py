@@ -11,7 +11,7 @@ from __future__ import annotations
 from functools import lru_cache
 from typing import Literal
 
-from pydantic import Field, SecretStr, model_validator
+from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # The localhost origin that ships as the default. Named so the production
@@ -89,6 +89,30 @@ class Settings(BaseSettings):
     )
     cors_origins: list[str] = Field(default_factory=lambda: list(DEV_CORS_ORIGINS))
     rate_limit_per_minute: int = 30
+
+    @field_validator(
+        "api_key",
+        "anthropic_api_key",
+        "openai_api_key",
+        "openrouter_api_key",
+        "groq_api_key",
+        "tavily_api_key",
+        "brave_api_key",
+        mode="before",
+    )
+    @classmethod
+    def _blank_means_unset(cls, value: object) -> object:
+        """Treat `KEY=` as no key at all, not as a key that is the empty string.
+
+        docker compose passes `${API_KEY:-}` through as an empty string, and so
+        does a half-edited .env. Read literally, an empty API_KEY would pass the
+        production check below as "configured" while every request failed 401,
+        and an empty provider key would pass the provider's own check only to
+        fail later, on the first paid call, with a less useful error.
+        """
+        if isinstance(value, str) and not value.strip():
+            return None
+        return value
 
     @model_validator(mode="after")
     def _production_must_be_authenticated(self) -> Settings:
