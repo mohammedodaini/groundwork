@@ -127,7 +127,7 @@ def test_allows_ordinary_public_url() -> None:
     assert is_url_safe("https://example.com/page", resolver=lambda h: ["93.184.216.34"])
 
 
-def test_blocks_dns_rebinding() -> None:
+def test_blocks_name_resolving_to_loopback() -> None:
     """A public-looking hostname that resolves to loopback must be rejected.
 
     This is the attack a hostname-only blocklist misses entirely.
@@ -136,7 +136,7 @@ def test_blocks_dns_rebinding() -> None:
         assert_url_is_safe("https://evil.example.com/", resolver=lambda h: ["127.0.0.1"])
 
 
-def test_blocks_multi_record_rebinding() -> None:
+def test_blocks_name_with_any_private_record() -> None:
     """If ANY resolved address is private, refuse - not just the first."""
     with pytest.raises(UnsafeURLError):
         assert_url_is_safe(

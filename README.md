@@ -44,7 +44,7 @@ cp .env.example .env
 
 make test          # full suite, no network, no keys
 python scripts/demo.py   # see a realistic annotated run, no API key needed
-make run           # http://localhost:8000
+make run           # http://localhost:8000, replays the same scripted run, labelled as such
 ```
 
 For real research:
@@ -63,6 +63,18 @@ without one, and never publishes the database port:
 echo "POSTGRES_PASSWORD=$(openssl rand -hex 24)" >> .env
 docker compose up --build
 ```
+
+### Deploying
+
+What the code enforces or depends on:
+
+- **`ENVIRONMENT=production` and an `API_KEY`.** Production refuses to start without a key, and every `/api` route then requires it.
+- **`POSTGRES_PASSWORD`** for compose. The database port is never published.
+- **`CORS_ORIGINS`** set to your UI's origin, unless the bundled UI is served by the API itself.
+- **`FORWARDED_ALLOW_IPS`** set to your reverse proxy's address, or rate limiting sees every client as the proxy.
+- **One API process per database.** Runs are in-process tasks, and startup marks any unfinished run as interrupted, which is only safe when no other process is running it.
+
+`make smoke URL=https://your-host API_KEY=...` runs one job end to end against the deployment.
 
 ---
 
@@ -183,7 +195,7 @@ An agent fetching model-suggested URLs is an SSRF primitive; on cloud hosts `169
 
 ### Other controls
 
-Optional `X-API-Key` with **constant-time comparison** (a naive `!=` leaks key material via timing), enforced on **every** `/api/` endpoint including the reads: gating only the endpoint that spends money would leave every objective and every result public, and the research payload is the sensitive data here. Setting `ENVIRONMENT=production` without an `API_KEY` **refuses to start** rather than booting an open, paid endpoint. Plus: per-IP sliding-window rate limit on the paid endpoint · secret-redaction filter on all log output · `extra="forbid"` on every schema · non-root Docker user.
+Optional `X-API-Key` with **constant-time comparison** (a naive `!=` leaks key material via timing), enforced on **every** `/api/` endpoint including the reads: gating only the endpoint that spends money would leave every objective and every result public, and the research payload is the sensitive data here. Setting `ENVIRONMENT=production` without an `API_KEY` **refuses to start** rather than booting an open, paid endpoint. Every run spends money, so at most `MAX_CONCURRENT_JOBS` run at once; more get **429 with `Retry-After`**, as do clients over the per-IP sliding-window rate limit. Plus: secret-redaction filter on all log output and on failure text returned to clients · `extra="forbid"` on every schema · non-root Docker user.
 
 ---
 
@@ -230,14 +242,16 @@ There is deliberately **no single "factual accuracy" score.** It would be the mo
 
 ## Testing
 
-**112 tests, 87% coverage, all offline.** No API keys, no network, no runtime downloads. Every push runs `make lint typecheck test` plus an offline evaluation smoke test on Python 3.11 and 3.12 ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)).
+**132 tests, 88% coverage, all offline.** No API keys, no network, no runtime downloads. Every push runs `make lint typecheck test` plus an offline evaluation smoke test on Python 3.11 and 3.12 ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)). A separate CI job runs the Docker image on its own defaults and the compose stack on Postgres in production mode, each through the real HTTP API.
 
 ```
-tests/test_security.py    28  injection detection, nonce isolation, SSRF, DNS rebinding
-tests/test_grounding.py   19  verbatim verification, epistemic downgrade, referential integrity
-tests/test_workflow.py    26  end-to-end, agentic loop, dedup, provider failures, schema repair
-tests/test_api.py         18  HITL gating, auth, persistence, validation
-tests/test_evaluation.py  15  scorers, dataset integrity, honest-reporting guarantees
+tests/test_security.py         33  injection detection, nonce isolation, SSRF policy, redirects
+tests/test_api.py              25  HITL gating, auth, persistence, restarts, spend controls, demo mode
+tests/test_workflow.py         26  end-to-end, agentic loop, dedup, provider failures, schema repair
+tests/test_grounding.py        19  verbatim verification, epistemic downgrade, referential integrity
+tests/test_evaluation.py       16  scorers, dataset integrity, honest-reporting guarantees
+tests/test_fetch_hardening.py  10  DNS-rebinding pinning, address policy, bounded reads
+tests/test_config.py            3  fail-fast configuration
 ```
 
 Failure tests map to real production failure modes:
@@ -246,7 +260,8 @@ Failure tests map to real production failure modes:
 | --- | --- |
 | `test_fabricated_quote_is_discarded_and_claim_downgraded` | Model invents a quote |
 | `test_injected_page_is_flagged_and_downtiered` | Malicious page content |
-| `test_blocks_dns_rebinding` | SSRF via DNS |
+| `test_dns_rebinding_between_check_and_connect_is_blocked` | SSRF via DNS rebinding |
+| `test_response_body_is_read_only_up_to_the_cap` | Huge page or compressed bomb |
 | `test_malformed_json_is_repaired` | Invalid structured output |
 | `test_persistently_malformed_output_raises` | Repair loop gives up cleanly |
 | `test_search_failure_does_not_crash_run` | Search API down |
@@ -254,6 +269,9 @@ Failure tests map to real production failure modes:
 | `test_loop_is_bounded_by_max_rounds` | Runaway agent loop |
 | `test_duplicate_content_is_collapsed` | Syndicated copies faking corroboration |
 | `test_second_decision_is_refused` | Double-click overwriting a reviewer |
+| `test_restart_fails_runs_a_crashed_process_left_running` | Crash leaves runs stuck in RUNNING |
+| `test_runs_beyond_the_concurrency_cap_get_429` | Burst of paid runs |
+| `test_offline_mode_replays_the_demo_instead_of_an_empty_report` | Fresh clone shows an empty report |
 
 Note `test_benign_business_text_is_not_flagged`: the injection detector is tested for **false positives** too. An over-eager regex silently degrades research quality by down-tiering good sources.
 
@@ -287,12 +305,11 @@ Stated because a portfolio project claiming no weaknesses is not credible.
 2. **Confidence scores are uncalibrated.** Kept as a relative signal, never thresholded on. ([ADR-005](docs/architecture-decisions/ADR-005-confidence-and-uncertainty.md))
 3. **No published benchmark results yet.** See above.
 4. **`create_all()` is not a migration strategy.** Production needs Alembic.
-5. **Background jobs are in-process asyncio tasks.** A restart loses running jobs; real deployment needs a queue.
-6. **Rate limiting is per-process.** Multi-worker needs Redis.
+5. **Background jobs are in-process asyncio tasks.** A restart still loses running jobs, though no longer silently: startup marks them failed with a message to resubmit. Real deployment wants a queue, and until then, one API process per database.
+6. **Rate limiting is per-process.** Multi-worker needs Redis, and behind a proxy it needs `FORWARDED_ALLOW_IPS`.
 7. **HTML extraction is minimal** and dependency-free, worse recall than trafilatura on complex pages.
 8. **The injection detector is heuristic** and English-biased; it will have false negatives.
-9. **Traces are in-memory** and lost on restart.
-10. **Source tiering is a domain-suffix rule**, so it misjudges unusual sites.
+9. **Source tiering is a domain-suffix rule**, so it misjudges unusual sites.
 
 ## Future work
 
