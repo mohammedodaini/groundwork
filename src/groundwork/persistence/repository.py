@@ -14,7 +14,7 @@ from contextlib import asynccontextmanager
 from datetime import UTC
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import (
     AsyncSession,
     async_sessionmaker,
@@ -32,6 +32,7 @@ from groundwork.persistence.models import (
     EvidenceRow,
     JobRow,
     SourceRow,
+    TraceRow,
 )
 
 logger = logging.getLogger(__name__)
@@ -80,6 +81,11 @@ class Database:
                 raise
 
 
+# Stored on runs that never finished, whether the process died or shutdown
+# outlasted its grace period. Phrased for the person polling the job.
+INTERRUPTED_MESSAGE = "Interrupted: the server stopped before this run finished. Submit it again."
+
+
 class ResearchRepository:
     """CRUD for research jobs and their evidence graph."""
 
@@ -106,6 +112,32 @@ class ResearchRepository:
             if row:
                 row.status = JobStatus.FAILED.value
                 row.error = error[:4000]
+
+    async def fail_interrupted_jobs(self) -> int:
+        """Mark runs a previous process never finished as FAILED; return how many.
+
+        Runs are in-process tasks, so a crash, an OOM kill or a hard restart
+        leaves rows in PENDING or RUNNING that nothing will ever advance, and a
+        client polling one would wait forever. This is called at startup, before
+        this process has started any task, so every such row is orphaned.
+
+        Assumes one API process owns the database, which the in-process task
+        model already requires.
+        """
+        unfinished = (JobStatus.PENDING.value, JobStatus.RUNNING.value)
+        async with self.db.session() as s:
+            ids = (
+                (await s.execute(select(JobRow.id).where(JobRow.status.in_(unfinished))))
+                .scalars()
+                .all()
+            )
+            if ids:
+                await s.execute(
+                    update(JobRow)
+                    .where(JobRow.id.in_(ids))
+                    .values(status=JobStatus.FAILED.value, error=INTERRUPTED_MESSAGE)
+                )
+            return len(ids)
 
     async def _set_status(self, job_id: str, status: JobStatus) -> None:
         async with self.db.session() as s:
@@ -222,6 +254,16 @@ class ResearchRepository:
             row.approval_note = note[:4000]
             row.decided_at = datetime.now(UTC)
             return True
+
+    async def save_trace(self, job_id: str, trace: dict) -> None:
+        """Persist a run's per-node timing, so it outlives the process."""
+        async with self.db.session() as s:
+            await s.merge(TraceRow(job_id=job_id, trace=trace))
+
+    async def get_trace(self, job_id: str) -> dict | None:
+        async with self.db.session() as s:
+            row = await s.get(TraceRow, job_id)
+            return row.trace if row else None
 
     async def get_job(self, job_id: str) -> JobRow | None:
         async with self.db.session() as s:

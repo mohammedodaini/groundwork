@@ -11,8 +11,12 @@ from __future__ import annotations
 from functools import lru_cache
 from typing import Literal
 
-from pydantic import Field, SecretStr
+from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+# The localhost origin that ships as the default. Named so the production
+# check below can tell "deliberately configured" from "never configured".
+DEV_CORS_ORIGINS = ("http://localhost:3000",)
 
 
 class Settings(BaseSettings):
@@ -81,10 +85,63 @@ class Settings(BaseSettings):
     # -- api ---------------------------------------------------------------
     api_key: SecretStr | None = Field(
         default=None,
-        description="If set, mutating endpoints require X-API-Key.",
+        description="If set, every /api endpoint requires X-API-Key. Required in production.",
     )
-    cors_origins: list[str] = Field(default_factory=lambda: ["http://localhost:3000"])
+    cors_origins: list[str] = Field(default_factory=lambda: list(DEV_CORS_ORIGINS))
     rate_limit_per_minute: int = 30
+    max_concurrent_jobs: int = Field(
+        default=4,
+        ge=1,
+        description="Research runs allowed in flight at once; more get 429 with Retry-After.",
+    )
+
+    @field_validator(
+        "api_key",
+        "anthropic_api_key",
+        "openai_api_key",
+        "openrouter_api_key",
+        "groq_api_key",
+        "tavily_api_key",
+        "brave_api_key",
+        mode="before",
+    )
+    @classmethod
+    def _blank_means_unset(cls, value: object) -> object:
+        """Treat `KEY=` as no key at all, not as a key that is the empty string.
+
+        docker compose passes `${API_KEY:-}` through as an empty string, and so
+        does a half-edited .env. Read literally, an empty API_KEY would pass the
+        production check below as "configured" while every request failed 401,
+        and an empty provider key would pass the provider's own check only to
+        fail later, on the first paid call, with a less useful error.
+        """
+        if isinstance(value, str) and not value.strip():
+            return None
+        return value
+
+    @model_validator(mode="after")
+    def _production_must_be_authenticated(self) -> Settings:
+        """Refuse to start an unauthenticated production deployment.
+
+        `api_key` defaults to None so local dev stays frictionless. That default
+        is fine on a laptop and indefensible in production: every endpoint,
+        including the one that spends money on LLM calls and the ones that
+        return past research, would be open to anyone who can reach the port.
+        A missing environment variable should not be the difference between a
+        private service and a public one, so we fail at startup instead.
+
+        CORS is only warned about, not enforced: a deployment that serves the
+        bundled UI from this same origin never needs a cross-origin entry, so
+        the default there is a smell rather than a hole. The warning is emitted
+        in `main.lifespan`, once logging is configured.
+        """
+        if self.environment == "production" and self.api_key is None:
+            raise ValueError(
+                "ENVIRONMENT=production requires API_KEY to be set; refusing to "
+                "start an unauthenticated deployment. Set API_KEY, or run with "
+                "ENVIRONMENT=local if this really is a local instance."
+            )
+        return self
 
     @property
     def uses_real_llm(self) -> bool:

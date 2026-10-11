@@ -7,6 +7,8 @@ decision is rejected rather than silently overwriting the first reviewer.
 
 from __future__ import annotations
 
+import time
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -221,3 +223,268 @@ def test_health_is_not_authenticated(monkeypatch):
     with TestClient(create_app()) as c:
         assert c.get("/health").status_code == 200
     get_settings.cache_clear()
+
+
+def test_read_endpoints_are_authenticated_when_configured(monkeypatch):
+    """Reads are gated too, not just the endpoint that spends money.
+
+    Gating writes alone was a real hole: with API_KEY set, creating a job
+    required the key but reading it back did not, so every objective and every
+    result was public to anyone who could reach the port. The research payload
+    IS the sensitive data here.
+    """
+    monkeypatch.setenv("API_KEY", "secret-key")
+    monkeypatch.setenv("LLM_PROVIDER", "fake")
+    monkeypatch.setenv("SEARCH_PROVIDER", "fake")
+    monkeypatch.setenv("DATABASE_URL", "sqlite+aiosqlite:///:memory:")
+    from groundwork.config import get_settings
+
+    get_settings.cache_clear()
+    auth = {"X-API-Key": "secret-key"}
+    with TestClient(create_app()) as c:
+        job_id = c.post(
+            "/api/research",
+            json={"objective": "A perfectly valid research objective here."},
+            headers=auth,
+        ).json()["job_id"]
+
+        for path in (
+            "/api/research",
+            f"/api/research/{job_id}",
+            f"/api/research/{job_id}/trace",
+        ):
+            assert c.get(path).status_code == 401, f"{path} leaked without a key"
+            assert c.get(path, headers={"X-API-Key": "wrong"}).status_code == 401
+
+        # The correct key still gets through.
+        assert c.get("/api/research", headers=auth).status_code == 200
+        assert c.get(f"/api/research/{job_id}", headers=auth).status_code == 200
+    get_settings.cache_clear()
+
+
+def test_reads_stay_open_when_no_key_is_configured(monkeypatch):
+    """The frictionless local default must survive the change above."""
+    monkeypatch.delenv("API_KEY", raising=False)
+    monkeypatch.setenv("LLM_PROVIDER", "fake")
+    monkeypatch.setenv("DATABASE_URL", "sqlite+aiosqlite:///:memory:")
+    from groundwork.config import get_settings
+
+    get_settings.cache_clear()
+    with TestClient(create_app()) as c:
+        assert c.get("/api/research").status_code == 200
+    get_settings.cache_clear()
+
+
+def test_production_without_api_key_refuses_to_start(monkeypatch):
+    """A missing env var must not be the difference between private and public.
+
+    `api_key` defaults to None so `make run` works with no setup. Combined with
+    ENVIRONMENT=production that default is an open, paid endpoint, so the app
+    refuses to construct its settings at all rather than booting wide open.
+    """
+    from pydantic import ValidationError
+
+    from groundwork.config import Settings
+
+    monkeypatch.delenv("API_KEY", raising=False)
+    # `_env_file=None` keeps the test hermetic: it must not depend on whatever
+    # the developer happens to have in their local .env.
+    with pytest.raises(ValidationError, match="requires API_KEY"):
+        Settings(_env_file=None, environment="production")
+
+    ok = Settings(_env_file=None, environment="production", api_key="a-real-key")
+    assert ok.api_key is not None
+    assert ok.api_key.get_secret_value() == "a-real-key"
+
+    # Local and test environments keep the frictionless default.
+    assert Settings(_env_file=None, environment="local").api_key is None
+
+
+def _wait_for_job(client, job_id: str, timeout: float = 10.0) -> dict:
+    """Poll until the job leaves PENDING/RUNNING. Jobs run as background tasks."""
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        body = client.get(f"/api/research/{job_id}").json()
+        if body["status"] not in ("PENDING", "RUNNING"):
+            return body
+        time.sleep(0.02)
+    raise AssertionError(f"job {job_id} still running after {timeout}s")
+
+
+def test_offline_mode_replays_the_demo_instead_of_an_empty_report(client):
+    """`make run` on a fresh clone must show a real-looking run.
+
+    The API used to build a FakeLLM with no script: the planner failed, nothing
+    was searched, and the UI showed an empty report waiting for approval.
+    """
+    res = client.post(
+        "/api/research",
+        json={"objective": "Find technical wholesalers in Gelderland processing orders manually."},
+    )
+    body = _wait_for_job(client, res.json()["job_id"])
+
+    result = body["result"]
+    claims = [c for entity in result["entities"] for c in entity["claims"]]
+    assert result["entities"], "the demo scenario finds entities"
+    assert any(c["status"] == "FACT" for c in claims)
+    assert result["warnings"][0].startswith("Offline demo mode")
+
+
+# --------------------------------------------------------------------------
+# Runs a previous process never finished
+# --------------------------------------------------------------------------
+
+
+async def test_unfinished_jobs_are_failed_when_the_server_restarts(repo, settings):
+    pending = await repo.create_job(
+        ResearchRequest(objective="A research objective, never started.")
+    )
+    running = await repo.create_job(ResearchRequest(objective="A research objective, mid-flight."))
+    await repo.mark_running(running)
+    done_req = ResearchRequest(
+        objective="A research objective that finished.", require_approval=False
+    )
+    done = await repo.create_job(done_req)
+    await repo.save_result(done, await _make_result(settings, done_req))
+
+    assert await repo.fail_interrupted_jobs() == 2
+    for job_id in (pending, running):
+        row = await repo.get_job(job_id)
+        assert row.status == JobStatus.FAILED.value
+        assert row.error.startswith("Interrupted")
+    assert (await repo.get_job(done)).status == JobStatus.COMPLETED.value
+
+
+def _app_env(monkeypatch, db_url: str, **env: str) -> None:
+    monkeypatch.setenv("LLM_PROVIDER", "fake")
+    monkeypatch.setenv("SEARCH_PROVIDER", "fake")
+    monkeypatch.setenv("DATABASE_URL", db_url)
+    monkeypatch.setenv("RATE_LIMIT_PER_MINUTE", "0")
+    for name, value in env.items():
+        monkeypatch.setenv(name, value)
+    from groundwork.config import get_settings
+
+    get_settings.cache_clear()
+
+
+def test_restart_fails_runs_a_crashed_process_left_running(tmp_path, monkeypatch):
+    """A crash leaves a RUNNING row behind; the next startup must close it out."""
+    import asyncio
+
+    db_url = f"sqlite+aiosqlite:///{tmp_path}/crash.db"
+
+    async def crash_mid_run() -> str:
+        db = Database(db_url)
+        await db.create_all()
+        repo = ResearchRepository(db)
+        job_id = await repo.create_job(
+            ResearchRequest(objective="A research run that never ended.")
+        )
+        await repo.mark_running(job_id)
+        await db.dispose()
+        return job_id
+
+    job_id = asyncio.run(crash_mid_run())
+    _app_env(monkeypatch, db_url)
+    with TestClient(create_app()) as c:
+        body = c.get(f"/api/research/{job_id}").json()
+
+    assert body["status"] == JobStatus.FAILED.value
+    assert body["error"].startswith("Interrupted")
+
+
+def test_shutdown_records_cancelled_runs_as_interrupted(tmp_path, monkeypatch):
+    """A run cancelled at shutdown raises CancelledError, which `except Exception`
+    does not catch, so it used to stay RUNNING in the database."""
+    import asyncio
+
+    import groundwork.main as main_module
+
+    class _StuckEngine:
+        async def run(self, request):
+            await asyncio.Event().wait()
+
+    db_url = f"sqlite+aiosqlite:///{tmp_path}/shutdown.db"
+    _app_env(monkeypatch, db_url)
+    monkeypatch.setattr(main_module, "SHUTDOWN_GRACE_SECONDS", 0.05)
+    monkeypatch.setattr(main_module, "build_engine", lambda settings: _StuckEngine())
+
+    with TestClient(create_app()) as c:
+        job_id = c.post(
+            "/api/research", json={"objective": "A research run that will not finish."}
+        ).json()["job_id"]
+        deadline = time.monotonic() + 5
+        while c.get(f"/api/research/{job_id}").json()["status"] != "RUNNING":
+            assert time.monotonic() < deadline, "job never started"
+            time.sleep(0.02)
+
+    async def read_back():
+        db = Database(db_url)
+        row = await ResearchRepository(db).get_job(job_id)
+        await db.dispose()
+        return row
+
+    row = asyncio.run(read_back())  # read directly: no startup cleanup involved
+    assert row.status == JobStatus.FAILED.value
+    assert row.error.startswith("Interrupted")
+
+
+def test_trace_survives_a_restart(tmp_path, monkeypatch):
+    """Traces lived in a dict on app.state: never evicted, and gone after a restart."""
+    db_url = f"sqlite+aiosqlite:///{tmp_path}/trace.db"
+    _app_env(monkeypatch, db_url)
+    with TestClient(create_app()) as c:
+        job_id = c.post(
+            "/api/research",
+            json={"objective": "Find technical wholesalers in Gelderland processing orders."},
+        ).json()["job_id"]
+        _wait_for_job(c, job_id)
+        assert c.get(f"/api/research/{job_id}/trace").status_code == 200
+
+    _app_env(monkeypatch, db_url)
+    with TestClient(create_app()) as c:
+        trace = c.get(f"/api/research/{job_id}/trace")
+
+    assert trace.status_code == 200
+    assert trace.json(), "the trace should carry per-node timings"
+
+
+# --------------------------------------------------------------------------
+# Spend controls
+# --------------------------------------------------------------------------
+
+
+def test_runs_beyond_the_concurrency_cap_get_429(tmp_path, monkeypatch):
+    import asyncio
+
+    import groundwork.main as main_module
+
+    class _StuckEngine:
+        async def run(self, request):
+            await asyncio.Event().wait()
+
+    _app_env(monkeypatch, f"sqlite+aiosqlite:///{tmp_path}/cap.db", MAX_CONCURRENT_JOBS="1")
+    monkeypatch.setattr(main_module, "SHUTDOWN_GRACE_SECONDS", 0.05)
+    monkeypatch.setattr(main_module, "build_engine", lambda settings: _StuckEngine())
+    body = {"objective": "A research run that holds the only slot."}
+
+    with TestClient(create_app()) as c:
+        assert c.post("/api/research", json=body).status_code == 202
+        refused = c.post("/api/research", json=body)
+        jobs = c.get("/api/research").json()
+
+    assert refused.status_code == 429
+    assert int(refused.headers["Retry-After"]) > 0
+    assert len(jobs) == 1, "a refused run must not leave a job row behind"
+
+
+def test_rate_limited_requests_say_when_to_retry(tmp_path, monkeypatch):
+    _app_env(monkeypatch, f"sqlite+aiosqlite:///{tmp_path}/rate.db", RATE_LIMIT_PER_MINUTE="1")
+    body = {"objective": "Find technical wholesalers in Gelderland processing orders."}
+
+    with TestClient(create_app()) as c:
+        assert c.post("/api/research", json=body).status_code == 202
+        limited = c.post("/api/research", json=body)
+
+    assert limited.status_code == 429
+    assert 0 < int(limited.headers["Retry-After"]) <= 61

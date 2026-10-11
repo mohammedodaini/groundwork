@@ -24,11 +24,12 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from groundwork.agent.graph import ResearchEngine
-from groundwork.config import Settings, get_settings
+from groundwork.config import DEV_CORS_ORIGINS, Settings, get_settings
+from groundwork.demo import DEMO_WARNING, build_demo_providers, is_demo_mode
 from groundwork.domain.enums import JobStatus
 from groundwork.domain.schemas import ResearchRequest
-from groundwork.logging_conf import configure_logging
-from groundwork.persistence.repository import Database, ResearchRepository
+from groundwork.logging_conf import configure_logging, redact
+from groundwork.persistence.repository import INTERRUPTED_MESSAGE, Database, ResearchRepository
 from groundwork.providers.llm import build_llm
 from groundwork.providers.search import ContentFetcher, build_search
 
@@ -45,6 +46,13 @@ STATIC_DIR = "static"
 # How long shutdown waits for running jobs before cancelling them.
 SHUTDOWN_GRACE_SECONDS = 10.0
 
+# What a refused run is told: roughly how long a slot takes to free up.
+JOB_SLOT_RETRY_AFTER_SECONDS = 30
+
+# The rate limiter keeps one entry per client address it has seen. Above this
+# many, idle entries are swept so a long-lived process does not keep them all.
+RATE_SWEEP_THRESHOLD = 10_000
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -53,12 +61,24 @@ async def lifespan(app: FastAPI):
     db = Database(settings.database_url)
     await db.create_all()
     app.state.settings = settings
+    app.state.active_runs = 0
     app.state.db = db
     app.state.repo = ResearchRepository(db)
+    interrupted = await app.state.repo.fail_interrupted_jobs()
+    if interrupted:
+        logger.warning("startup_failed_interrupted_jobs", extra={"count": interrupted})
     logger.info(
         "startup",
         extra={"llm": settings.llm_provider, "search": settings.search_provider},
     )
+    # Not fatal: a deployment serving the bundled UI from this origin needs no
+    # cross-origin entry at all. Still worth saying out loud, because the other
+    # reason to see this value in production is that nobody set it.
+    if settings.environment == "production" and tuple(settings.cors_origins) == DEV_CORS_ORIGINS:
+        logger.warning(
+            "cors_origins_left_at_development_default",
+            extra={"cors_origins": list(settings.cors_origins)},
+        )
     try:
         yield
     finally:
@@ -85,8 +105,27 @@ def get_app_settings(request: Request) -> Settings:
     return request.app.state.settings
 
 
+def _public_error(exc: BaseException) -> str:
+    """The failure text stored on a job and returned to API clients.
+
+    Exception messages carry whatever they were handed: a URL with a token in
+    its query string, a provider error body echoing a key. The redaction the
+    logs already get is applied before the text leaves the server.
+    """
+    return redact(f"{type(exc).__name__}: {exc}")[:2000]
+
+
 def build_engine(settings: Settings) -> ResearchEngine:
-    """Fresh providers per run so token counters are per-run, not global."""
+    """Fresh providers per run so token counters are per-run, not global.
+
+    With both providers set to `fake` there is nothing real to research with, so
+    the run replays the scripted demo scenario instead of returning an empty
+    report: the same graph, verification and critic, with fixture answers in
+    place of a model. `make run` on a fresh clone shows a real-looking result.
+    """
+    if is_demo_mode(settings):
+        llm, search, fetcher = build_demo_providers(settings)
+        return ResearchEngine(settings=settings, llm=llm, search=search, fetcher=fetcher)
     return ResearchEngine(
         settings=settings,
         llm=build_llm(settings),
@@ -116,9 +155,6 @@ async def require_api_key(
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid or missing API key")
 
 
-_hits: dict[str, deque[float]] = defaultdict(deque)
-
-
 async def rate_limit(request: Request) -> None:
     """In-process sliding window.
 
@@ -126,19 +162,30 @@ async def rate_limit(request: Request) -> None:
     more than one worker you want Redis. It is here because an endpoint that
     triggers paid LLM calls should never be unbounded, and a simple correct
     limiter beats a sophisticated absent one.
+
+    Behind a reverse proxy, `request.client.host` is the proxy unless uvicorn
+    is told to trust its X-Forwarded-For header (FORWARDED_ALLOW_IPS); without
+    that, every client shares one bucket.
     """
     settings: Settings = request.app.state.settings
     limit = settings.rate_limit_per_minute
     if limit <= 0:
         return
+    hits: dict[str, deque[float]] = request.app.state.rate_hits
     key = request.client.host if request.client else "unknown"
     now = time.monotonic()
-    window = _hits[key]
+    if len(hits) > RATE_SWEEP_THRESHOLD:
+        for stale in [k for k, w in hits.items() if not w or now - w[-1] > 60]:
+            del hits[stale]
+    window = hits[key]
     while window and now - window[0] > 60:
         window.popleft()
     if len(window) >= limit:
+        retry_after = max(1, int(60 - (now - window[0])) + 1)
         raise HTTPException(
-            status.HTTP_429_TOO_MANY_REQUESTS, "Rate limit exceeded; retry shortly."
+            status.HTTP_429_TOO_MANY_REQUESTS,
+            "Rate limit exceeded; retry shortly.",
+            headers={"Retry-After": str(retry_after)},
         )
     window.append(now)
 
@@ -230,18 +277,42 @@ def create_app() -> FastAPI:
         settings: Annotated[Settings, Depends(get_app_settings)],
     ) -> JobCreated:
         """Start a run. Returns immediately; poll GET /api/research/{id}."""
-        job_id = await repo.create_job(request)
+        # Every run spends money on LLM and search calls, so the number in flight
+        # is capped. The check comes before the job row exists, so a refused
+        # request leaves nothing behind.
+        if raw.app.state.active_runs >= settings.max_concurrent_jobs:
+            raise HTTPException(
+                status.HTTP_429_TOO_MANY_REQUESTS,
+                "Too many research runs in progress; retry shortly.",
+                headers={"Retry-After": str(JOB_SLOT_RETRY_AFTER_SECONDS)},
+            )
+        # Claimed before the first await, so two concurrent requests cannot both
+        # take the last slot. A counter rather than a semaphore: nothing here can
+        # ever wait, so a regression fails loudly instead of hanging a request.
+        raw.app.state.active_runs += 1
+        try:
+            job_id = await repo.create_job(request)
+        except BaseException:
+            raw.app.state.active_runs -= 1
+            raise
 
         async def _run() -> None:
             await repo.mark_running(job_id)
             try:
                 engine = build_engine(settings)
                 result = await engine.run(request)
+                if is_demo_mode(settings):
+                    result.warnings.insert(0, DEMO_WARNING)
                 await repo.save_result(job_id, result)
-                raw.app.state.traces[job_id] = engine.tracer.summary()
+                await repo.save_trace(job_id, engine.tracer.summary())
+            except asyncio.CancelledError:
+                # Shutdown cancelled a run that outlived the grace period.
+                # Record that, rather than leave the row claiming to be RUNNING.
+                await repo.mark_failed(job_id, INTERRUPTED_MESSAGE)
+                raise
             except Exception as exc:
                 logger.exception("job_failed", extra={"job_id": job_id})
-                await repo.mark_failed(job_id, str(exc))
+                await repo.mark_failed(job_id, _public_error(exc))
 
         # Fire-and-forget is acceptable for a single-node portfolio app; a
         # production deployment would use a real queue (documented in README).
@@ -249,9 +320,19 @@ def create_app() -> FastAPI:
         raw.app.state.tasks.add(task)
         task.add_done_callback(raw.app.state.tasks.discard)
 
+        def _free_slot(_: asyncio.Task[None]) -> None:
+            raw.app.state.active_runs -= 1
+
+        # Runs on success, failure and cancellation alike.
+        task.add_done_callback(_free_slot)
+
         return JobCreated(job_id=job_id, status=JobStatus.PENDING.value)
 
-    @app.get("/api/research/{job_id}", tags=["research"])
+    @app.get(
+        "/api/research/{job_id}",
+        dependencies=[Depends(require_api_key)],
+        tags=["research"],
+    )
     async def get_research(
         job_id: str, repo: Annotated[ResearchRepository, Depends(get_repo)]
     ) -> JSONResponse:
@@ -271,7 +352,12 @@ def create_app() -> FastAPI:
             }
         )
 
-    @app.get("/api/research", response_model=list[JobSummary], tags=["research"])
+    @app.get(
+        "/api/research",
+        response_model=list[JobSummary],
+        dependencies=[Depends(require_api_key)],
+        tags=["research"],
+    )
     async def list_research(
         repo: Annotated[ResearchRepository, Depends(get_repo)], limit: int = 50
     ) -> list[JobSummary]:
@@ -301,9 +387,15 @@ def create_app() -> FastAPI:
             )
         return out
 
-    @app.get("/api/research/{job_id}/trace", tags=["observability"])
-    async def get_trace(job_id: str, raw: Request) -> dict:
-        trace = raw.app.state.traces.get(job_id)
+    @app.get(
+        "/api/research/{job_id}/trace",
+        dependencies=[Depends(require_api_key)],
+        tags=["observability"],
+    )
+    async def get_trace(
+        job_id: str, repo: Annotated[ResearchRepository, Depends(get_repo)]
+    ) -> dict:
+        trace = await repo.get_trace(job_id)
         if trace is None:
             raise HTTPException(404, "No trace for this job")
         return trace
@@ -349,7 +441,7 @@ def create_app() -> FastAPI:
 
     # In-memory side tables. Not durable by design; traces are debugging aids.
     app.state.tasks = set()
-    app.state.traces = {}
+    app.state.rate_hits = defaultdict(deque)
     return app
 
 

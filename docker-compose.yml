@@ -3,10 +3,14 @@ services:
     image: postgres:16-alpine
     environment:
       POSTGRES_USER: groundwork
-      POSTGRES_PASSWORD: groundwork
+      # Required, never defaulted: a password checked into the repository is a
+      # password everyone has. Set it in .env (see .env.example).
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env; see .env.example}
       POSTGRES_DB: groundwork
-    ports:
-      - "5432:5432"
+    # No `ports:` on purpose. The api reaches Postgres over the compose network
+    # as db:5432. Publishing the port would expose the database on the host's
+    # network interfaces, and Docker's published ports bypass host firewalls
+    # such as ufw. To inspect it: docker compose exec db psql -U groundwork
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
@@ -22,11 +26,20 @@ services:
       db:
         condition: service_healthy
     environment:
-      DATABASE_URL: postgresql+asyncpg://groundwork:groundwork@db:5432/groundwork
+      DATABASE_URL: postgresql+asyncpg://groundwork:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env; see .env.example}@db:5432/groundwork
+      # ENVIRONMENT=production refuses to start without API_KEY. Both are passed
+      # through: a key set in .env must reach the container, or the API it
+      # protects runs open.
+      ENVIRONMENT: ${ENVIRONMENT:-local}
+      API_KEY: ${API_KEY:-}
+      CORS_ORIGINS: ${CORS_ORIGINS:-["http://localhost:3000"]}
       LLM_PROVIDER: ${LLM_PROVIDER:-fake}
       SEARCH_PROVIDER: ${SEARCH_PROVIDER:-fake}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
       TAVILY_API_KEY: ${TAVILY_API_KEY:-}
+      # Trust X-Forwarded-For only from your reverse proxy, so the rate limiter
+      # sees real client addresses. The default trusts nobody but localhost.
+      FORWARDED_ALLOW_IPS: ${FORWARDED_ALLOW_IPS:-127.0.0.1}
       LOG_JSON: "true"
     ports:
       - "8000:8000"

@@ -152,3 +152,20 @@ class EvidenceRow(Base):
 
     claim: Mapped[ClaimRow | None] = relationship(back_populates="evidence")
     source: Mapped[SourceRow] = relationship(back_populates="evidence")
+
+
+class TraceRow(Base):
+    """Per-node timing for one run, served by GET /api/research/{id}/trace.
+
+    A table of its own rather than a column on research_jobs: `create_all`
+    creates missing tables on an existing database but never alters existing
+    ones, so a new column would break every database created before it.
+    """
+
+    __tablename__ = "research_traces"
+
+    job_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("research_jobs.id", ondelete="CASCADE"), primary_key=True
+    )
+    trace: Mapped[dict] = mapped_column(JSON)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
