@@ -28,8 +28,8 @@ from groundwork.config import DEV_CORS_ORIGINS, Settings, get_settings
 from groundwork.demo import DEMO_WARNING, build_demo_providers, is_demo_mode
 from groundwork.domain.enums import JobStatus
 from groundwork.domain.schemas import ResearchRequest
-from groundwork.logging_conf import configure_logging
-from groundwork.persistence.repository import Database, ResearchRepository
+from groundwork.logging_conf import configure_logging, redact
+from groundwork.persistence.repository import INTERRUPTED_MESSAGE, Database, ResearchRepository
 from groundwork.providers.llm import build_llm
 from groundwork.providers.search import ContentFetcher, build_search
 
@@ -56,6 +56,9 @@ async def lifespan(app: FastAPI):
     app.state.settings = settings
     app.state.db = db
     app.state.repo = ResearchRepository(db)
+    interrupted = await app.state.repo.fail_interrupted_jobs()
+    if interrupted:
+        logger.warning("startup_failed_interrupted_jobs", extra={"count": interrupted})
     logger.info(
         "startup",
         extra={"llm": settings.llm_provider, "search": settings.search_provider},
@@ -92,6 +95,16 @@ def get_repo(request: Request) -> ResearchRepository:
 
 def get_app_settings(request: Request) -> Settings:
     return request.app.state.settings
+
+
+def _public_error(exc: BaseException) -> str:
+    """The failure text stored on a job and returned to API clients.
+
+    Exception messages carry whatever they were handed: a URL with a token in
+    its query string, a provider error body echoing a key. The redaction the
+    logs already get is applied before the text leaves the server.
+    """
+    return redact(f"{type(exc).__name__}: {exc}")[:2000]
 
 
 def build_engine(settings: Settings) -> ResearchEngine:
@@ -259,9 +272,14 @@ def create_app() -> FastAPI:
                     result.warnings.insert(0, DEMO_WARNING)
                 await repo.save_result(job_id, result)
                 raw.app.state.traces[job_id] = engine.tracer.summary()
+            except asyncio.CancelledError:
+                # Shutdown cancelled a run that outlived the grace period.
+                # Record that, rather than leave the row claiming to be RUNNING.
+                await repo.mark_failed(job_id, INTERRUPTED_MESSAGE)
+                raise
             except Exception as exc:
                 logger.exception("job_failed", extra={"job_id": job_id})
-                await repo.mark_failed(job_id, str(exc))
+                await repo.mark_failed(job_id, _public_error(exc))
 
         # Fire-and-forget is acceptable for a single-node portfolio app; a
         # production deployment would use a real queue (documented in README).

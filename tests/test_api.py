@@ -328,3 +328,100 @@ def test_offline_mode_replays_the_demo_instead_of_an_empty_report(client):
     assert result["entities"], "the demo scenario finds entities"
     assert any(c["status"] == "FACT" for c in claims)
     assert result["warnings"][0].startswith("Offline demo mode")
+
+
+# --------------------------------------------------------------------------
+# Runs a previous process never finished
+# --------------------------------------------------------------------------
+
+
+async def test_unfinished_jobs_are_failed_when_the_server_restarts(repo, settings):
+    pending = await repo.create_job(
+        ResearchRequest(objective="A research objective, never started.")
+    )
+    running = await repo.create_job(ResearchRequest(objective="A research objective, mid-flight."))
+    await repo.mark_running(running)
+    done_req = ResearchRequest(
+        objective="A research objective that finished.", require_approval=False
+    )
+    done = await repo.create_job(done_req)
+    await repo.save_result(done, await _make_result(settings, done_req))
+
+    assert await repo.fail_interrupted_jobs() == 2
+    for job_id in (pending, running):
+        row = await repo.get_job(job_id)
+        assert row.status == JobStatus.FAILED.value
+        assert row.error.startswith("Interrupted")
+    assert (await repo.get_job(done)).status == JobStatus.COMPLETED.value
+
+
+def _app_env(monkeypatch, db_url: str) -> None:
+    monkeypatch.setenv("LLM_PROVIDER", "fake")
+    monkeypatch.setenv("SEARCH_PROVIDER", "fake")
+    monkeypatch.setenv("DATABASE_URL", db_url)
+    monkeypatch.setenv("RATE_LIMIT_PER_MINUTE", "0")
+    from groundwork.config import get_settings
+
+    get_settings.cache_clear()
+
+
+def test_restart_fails_runs_a_crashed_process_left_running(tmp_path, monkeypatch):
+    """A crash leaves a RUNNING row behind; the next startup must close it out."""
+    import asyncio
+
+    db_url = f"sqlite+aiosqlite:///{tmp_path}/crash.db"
+
+    async def crash_mid_run() -> str:
+        db = Database(db_url)
+        await db.create_all()
+        repo = ResearchRepository(db)
+        job_id = await repo.create_job(
+            ResearchRequest(objective="A research run that never ended.")
+        )
+        await repo.mark_running(job_id)
+        await db.dispose()
+        return job_id
+
+    job_id = asyncio.run(crash_mid_run())
+    _app_env(monkeypatch, db_url)
+    with TestClient(create_app()) as c:
+        body = c.get(f"/api/research/{job_id}").json()
+
+    assert body["status"] == JobStatus.FAILED.value
+    assert body["error"].startswith("Interrupted")
+
+
+def test_shutdown_records_cancelled_runs_as_interrupted(tmp_path, monkeypatch):
+    """A run cancelled at shutdown raises CancelledError, which `except Exception`
+    does not catch, so it used to stay RUNNING in the database."""
+    import asyncio
+
+    import groundwork.main as main_module
+
+    class _StuckEngine:
+        async def run(self, request):
+            await asyncio.Event().wait()
+
+    db_url = f"sqlite+aiosqlite:///{tmp_path}/shutdown.db"
+    _app_env(monkeypatch, db_url)
+    monkeypatch.setattr(main_module, "SHUTDOWN_GRACE_SECONDS", 0.05)
+    monkeypatch.setattr(main_module, "build_engine", lambda settings: _StuckEngine())
+
+    with TestClient(create_app()) as c:
+        job_id = c.post(
+            "/api/research", json={"objective": "A research run that will not finish."}
+        ).json()["job_id"]
+        deadline = time.monotonic() + 5
+        while c.get(f"/api/research/{job_id}").json()["status"] != "RUNNING":
+            assert time.monotonic() < deadline, "job never started"
+            time.sleep(0.02)
+
+    async def read_back():
+        db = Database(db_url)
+        row = await ResearchRepository(db).get_job(job_id)
+        await db.dispose()
+        return row
+
+    row = asyncio.run(read_back())  # read directly: no startup cleanup involved
+    assert row.status == JobStatus.FAILED.value
+    assert row.error.startswith("Interrupted")
