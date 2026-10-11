@@ -89,6 +89,11 @@ class Settings(BaseSettings):
     )
     cors_origins: list[str] = Field(default_factory=lambda: list(DEV_CORS_ORIGINS))
     rate_limit_per_minute: int = 30
+    max_concurrent_jobs: int = Field(
+        default=4,
+        ge=1,
+        description="Research runs allowed in flight at once; more get 429 with Retry-After.",
+    )
 
     @field_validator(
         "api_key",

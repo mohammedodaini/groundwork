@@ -46,6 +46,13 @@ STATIC_DIR = "static"
 # How long shutdown waits for running jobs before cancelling them.
 SHUTDOWN_GRACE_SECONDS = 10.0
 
+# What a refused run is told: roughly how long a slot takes to free up.
+JOB_SLOT_RETRY_AFTER_SECONDS = 30
+
+# The rate limiter keeps one entry per client address it has seen. Above this
+# many, idle entries are swept so a long-lived process does not keep them all.
+RATE_SWEEP_THRESHOLD = 10_000
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -54,6 +61,7 @@ async def lifespan(app: FastAPI):
     db = Database(settings.database_url)
     await db.create_all()
     app.state.settings = settings
+    app.state.active_runs = 0
     app.state.db = db
     app.state.repo = ResearchRepository(db)
     interrupted = await app.state.repo.fail_interrupted_jobs()
@@ -147,9 +155,6 @@ async def require_api_key(
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid or missing API key")
 
 
-_hits: dict[str, deque[float]] = defaultdict(deque)
-
-
 async def rate_limit(request: Request) -> None:
     """In-process sliding window.
 
@@ -157,19 +162,30 @@ async def rate_limit(request: Request) -> None:
     more than one worker you want Redis. It is here because an endpoint that
     triggers paid LLM calls should never be unbounded, and a simple correct
     limiter beats a sophisticated absent one.
+
+    Behind a reverse proxy, `request.client.host` is the proxy unless uvicorn
+    is told to trust its X-Forwarded-For header (FORWARDED_ALLOW_IPS); without
+    that, every client shares one bucket.
     """
     settings: Settings = request.app.state.settings
     limit = settings.rate_limit_per_minute
     if limit <= 0:
         return
+    hits: dict[str, deque[float]] = request.app.state.rate_hits
     key = request.client.host if request.client else "unknown"
     now = time.monotonic()
-    window = _hits[key]
+    if len(hits) > RATE_SWEEP_THRESHOLD:
+        for stale in [k for k, w in hits.items() if not w or now - w[-1] > 60]:
+            del hits[stale]
+    window = hits[key]
     while window and now - window[0] > 60:
         window.popleft()
     if len(window) >= limit:
+        retry_after = max(1, int(60 - (now - window[0])) + 1)
         raise HTTPException(
-            status.HTTP_429_TOO_MANY_REQUESTS, "Rate limit exceeded; retry shortly."
+            status.HTTP_429_TOO_MANY_REQUESTS,
+            "Rate limit exceeded; retry shortly.",
+            headers={"Retry-After": str(retry_after)},
         )
     window.append(now)
 
@@ -261,7 +277,24 @@ def create_app() -> FastAPI:
         settings: Annotated[Settings, Depends(get_app_settings)],
     ) -> JobCreated:
         """Start a run. Returns immediately; poll GET /api/research/{id}."""
-        job_id = await repo.create_job(request)
+        # Every run spends money on LLM and search calls, so the number in flight
+        # is capped. The check comes before the job row exists, so a refused
+        # request leaves nothing behind.
+        if raw.app.state.active_runs >= settings.max_concurrent_jobs:
+            raise HTTPException(
+                status.HTTP_429_TOO_MANY_REQUESTS,
+                "Too many research runs in progress; retry shortly.",
+                headers={"Retry-After": str(JOB_SLOT_RETRY_AFTER_SECONDS)},
+            )
+        # Claimed before the first await, so two concurrent requests cannot both
+        # take the last slot. A counter rather than a semaphore: nothing here can
+        # ever wait, so a regression fails loudly instead of hanging a request.
+        raw.app.state.active_runs += 1
+        try:
+            job_id = await repo.create_job(request)
+        except BaseException:
+            raw.app.state.active_runs -= 1
+            raise
 
         async def _run() -> None:
             await repo.mark_running(job_id)
@@ -286,6 +319,12 @@ def create_app() -> FastAPI:
         task = asyncio.create_task(_run())
         raw.app.state.tasks.add(task)
         task.add_done_callback(raw.app.state.tasks.discard)
+
+        def _free_slot(_: asyncio.Task[None]) -> None:
+            raw.app.state.active_runs -= 1
+
+        # Runs on success, failure and cancellation alike.
+        task.add_done_callback(_free_slot)
 
         return JobCreated(job_id=job_id, status=JobStatus.PENDING.value)
 
@@ -402,6 +441,7 @@ def create_app() -> FastAPI:
 
     # In-memory side tables. Not durable by design; traces are debugging aids.
     app.state.tasks = set()
+    app.state.rate_hits = defaultdict(deque)
     return app
 
 

@@ -355,11 +355,13 @@ async def test_unfinished_jobs_are_failed_when_the_server_restarts(repo, setting
     assert (await repo.get_job(done)).status == JobStatus.COMPLETED.value
 
 
-def _app_env(monkeypatch, db_url: str) -> None:
+def _app_env(monkeypatch, db_url: str, **env: str) -> None:
     monkeypatch.setenv("LLM_PROVIDER", "fake")
     monkeypatch.setenv("SEARCH_PROVIDER", "fake")
     monkeypatch.setenv("DATABASE_URL", db_url)
     monkeypatch.setenv("RATE_LIMIT_PER_MINUTE", "0")
+    for name, value in env.items():
+        monkeypatch.setenv(name, value)
     from groundwork.config import get_settings
 
     get_settings.cache_clear()
@@ -445,3 +447,44 @@ def test_trace_survives_a_restart(tmp_path, monkeypatch):
 
     assert trace.status_code == 200
     assert trace.json(), "the trace should carry per-node timings"
+
+
+# --------------------------------------------------------------------------
+# Spend controls
+# --------------------------------------------------------------------------
+
+
+def test_runs_beyond_the_concurrency_cap_get_429(tmp_path, monkeypatch):
+    import asyncio
+
+    import groundwork.main as main_module
+
+    class _StuckEngine:
+        async def run(self, request):
+            await asyncio.Event().wait()
+
+    _app_env(monkeypatch, f"sqlite+aiosqlite:///{tmp_path}/cap.db", MAX_CONCURRENT_JOBS="1")
+    monkeypatch.setattr(main_module, "SHUTDOWN_GRACE_SECONDS", 0.05)
+    monkeypatch.setattr(main_module, "build_engine", lambda settings: _StuckEngine())
+    body = {"objective": "A research run that holds the only slot."}
+
+    with TestClient(create_app()) as c:
+        assert c.post("/api/research", json=body).status_code == 202
+        refused = c.post("/api/research", json=body)
+        jobs = c.get("/api/research").json()
+
+    assert refused.status_code == 429
+    assert int(refused.headers["Retry-After"]) > 0
+    assert len(jobs) == 1, "a refused run must not leave a job row behind"
+
+
+def test_rate_limited_requests_say_when_to_retry(tmp_path, monkeypatch):
+    _app_env(monkeypatch, f"sqlite+aiosqlite:///{tmp_path}/rate.db", RATE_LIMIT_PER_MINUTE="1")
+    body = {"objective": "Find technical wholesalers in Gelderland processing orders."}
+
+    with TestClient(create_app()) as c:
+        assert c.post("/api/research", json=body).status_code == 202
+        limited = c.post("/api/research", json=body)
+
+    assert limited.status_code == 429
+    assert 0 < int(limited.headers["Retry-After"]) <= 61
