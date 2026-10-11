@@ -303,8 +303,11 @@ def create_app() -> FastAPI:
                 result = await engine.run(request)
                 if is_demo_mode(settings):
                     result.warnings.insert(0, DEMO_WARNING)
-                await repo.save_result(job_id, result)
+                # Trace first. The status change inside save_result is what tells a
+                # polling client the run is finished, so everything about the run
+                # must already be stored when it happens.
                 await repo.save_trace(job_id, engine.tracer.summary())
+                await repo.save_result(job_id, result)
             except asyncio.CancelledError:
                 # Shutdown cancelled a run that outlived the grace period.
                 # Record that, rather than leave the row claiming to be RUNNING.

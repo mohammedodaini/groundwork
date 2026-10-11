@@ -8,6 +8,10 @@ on:
     branches: [main]
   pull_request:
   workflow_dispatch:
+  # Weekly, so an advisory published against a locked dependency turns main red
+  # even when nobody pushes. The lockfile is what actually ships.
+  schedule:
+    - cron: "23 6 * * 1"
 
 concurrency:
   group: ci-${{ github.ref }}
@@ -40,6 +44,13 @@ jobs:
         # dependency changed in pyproject.toml without `make lock`.
         if: matrix.python-version == '3.12'
         run: pip install uv==0.12.3 && make lock-check
+
+      - name: Known vulnerabilities in locked dependencies
+        if: matrix.python-version == '3.12'
+        run: >-
+          pip install pip-audit==2.10.1 &&
+          pip-audit -r requirements.lock -r requirements-dev.lock
+          --disable-pip --no-deps --progress-spinner off
 
       - name: Lint (ruff check + format check)
         run: make lint
